@@ -23,6 +23,7 @@ import {
   featureFlags,
   itemGifts,
   marketListings,
+  bounties,
   marketOffers,
   marketSales,
   miniTaskCompletions,
@@ -335,7 +336,8 @@ export async function setCurrentSeason(id: string): Promise<void> {
  * Closes a season, crowning its champion, or reopens it. A closed season's
  * weeks, roster and scores are read-only (see the middleware). Closing also
  * takes its open marketplace listings down and declines their pending
- * offers, so items go back to their sellers and offered coins are freed.
+ * offers, so items go back to their sellers and offered coins are freed,
+ * and cancels its open bounties, freeing their rewards.
  */
 export async function setSeasonClosed(
   id: string,
@@ -362,6 +364,10 @@ export async function setSeasonClosed(
         and o.status = 'pending'`),
     db.execute(sql`
       update ${marketListings}
+      set status = 'cancelled', closed_at = now()
+      where season_id = ${id} and status = 'open'`),
+    db.execute(sql`
+      update ${bounties}
       set status = 'cancelled', closed_at = now()
       where season_id = ${id} and status = 'open'`),
   ]);

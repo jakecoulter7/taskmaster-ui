@@ -56,7 +56,7 @@ src/
 │   ├── client.ts      # createDb(url) — node-postgres client for scripts
 │   └── index.ts       # getDb() — Neon HTTP client used by the site
 ├── data/              # The data-access layer (the only code that imports db/)
-│   ├── competition.ts # loads every table in one batch (edge-cached rows), builds a season's snapshot
+│   ├── competition.ts # loads the open seasons' rows in one batch (edge-cached), closed seasons on demand; builds a season's snapshot
 │   ├── seasons.ts     # rows → Season (status derived), season lookups, rowsForSeason
 │   ├── season-close.ts # what still stops a season being closed
 │   ├── hall-of-fame-queries.ts # closed seasons' podiums, squads, awards + all-time records
@@ -138,16 +138,24 @@ db/schema.ts  →  data/*.ts          →   data/queries.ts   →   pages      �
   `getQueries(seasonId)` for another. Pages about one player, squad or week
   use `recordScope` (`src/lib/season-scope.ts`) to load that record's season.
   The rows are loaded lazily, at most once per request, and each season's
-  snapshot is built from them at most once.
+  snapshot is built from them at most once. A closed season's rows are only
+  loaded when something asks for its snapshot (see below).
 - All cross-record computation (leaderboard ranking, rank movement, awards,
   head-to-head) lives in `queries.ts` as pure functions.
 
 The database stores **facts only** (points, dates, membership). Finishing
 positions, task status and totals are always derived, so they can't drift.
-[`competition.ts`](src/data/competition.ts) loads every table in a single
-HTTP round trip (or from the edge cache, see below); the selectors are pure,
-synchronous functions over that snapshot, which keeps the components unaware
-of the database.
+[`competition.ts`](src/data/competition.ts) loads what every request needs in
+a single HTTP round trip (or from the edge cache, see below): the seasons, a
+light index of which season each player, squad and week is in, the
+site-wide tables (polls, changelog, shop, flags) and the season-specific rows
+of every season that **isn't closed**, narrowed in SQL
+(`seasonRowQueries`). A closed season's rows are loaded on demand, in one
+more round trip, only by pages about it (the hall of fame, its standings,
+its wrapped, its old players) via `loadSeasonRows`. So the per-request load
+stays the same size however many seasons are archived. The selectors are
+pure, synchronous functions over the snapshot, which keeps the components
+unaware of the database.
 
 ### ⚡ Caching
 
@@ -170,6 +178,13 @@ rows are cached at the edge rather than read on every page view:
   skip it (`isCompetitionNeutralRoute` in `src/lib/routes.ts`).
 - **Staleness:** other data centres, and edits made from scripts or the Neon
   console, show up within 5 minutes.
+- **Closed seasons** are cached separately, per season, for 24 hours
+  (`ARCHIVE_CACHE_TTL_SECONDS`), as they rarely change (a reopened season
+  loads with the open ones). The key includes when the season was closed and
+  an archive generation that every signed-in write purges along with the
+  live rows, so late writes (e.g. People's Choice votes after the season
+  closes) show straight away. Script edits to a closed season can take up
+  to a day.
 - **Admins** always read the database directly; `/admin` never uses the
   cache.
 - **`/live`** reads the show's state (holds, reveal counts and held scores)
@@ -300,8 +315,8 @@ along with the weekly runbook:
 | seasons   | `/admin/seasons`  | Part of the weeks area. Create seasons, make one current, close one to crown its champion (or reopen it), rename, and delete empty ones. Editor at `/admin/seasons/<id>`.                                                                                                                                                                                                       |
 | weeks     | `/admin/weeks`    | One row per task with its progress. Each week is a workspace with four tabs: **brief** (`/admin/weeks/<id>`: the task form, reveal password, delete), **judge** (`…/judge`: entries gallery with a points box per player or squad, or a plain grid when the task takes no entries, plus bonuses and the score history), **results night** (`…/live`) and **recap** (`…/recap`). |
 | roster    | `/admin/roster`   | Players (with sign-in accounts) and squads, per season; editors at `/admin/players/<id>` and `/admin/teams/<id>`.                                                                                                                                                                                                                                                               |
-| site      | `/admin/site`     | Feature flags, [polls](#️-polls), [mini-tasks](#-mini-tasks--achievements), the homepage changelog and the shop; editors at `/admin/polls/<id>`, `/admin/mini-tasks/<id>` and `/admin/changelog/<id>`; marketplace moderation at `/admin/market`.                                                                                                                               |
-| activity  | `/admin/activity` | One season's timeline of everything that moved points or Clim Coin (score changes, coin grants, gifts, purchases, crates, power-ups, skills, wishes, mini-tasks, marketplace sales), filterable by kind and player, for disputes.                                                                                                                                               |
+| site      | `/admin/site`     | Feature flags, [polls](#️-polls), [mini-tasks](#-mini-tasks--achievements), the homepage changelog and the shop; editors at `/admin/polls/<id>`, `/admin/mini-tasks/<id>` and `/admin/changelog/<id>`; marketplace and [bounty](#-bounties) moderation at `/admin/market`.                                                                                                      |
+| activity  | `/admin/activity` | One season's timeline of everything that moved points or Clim Coin (score changes, coin grants, gifts, purchases, crates, power-ups, skills, wishes, mini-tasks, marketplace sales, bounties), filterable by kind and player, for disputes. The [economy report](#-economy-report) is at `/admin/economy`.                                                                      |
 | guide     | `/admin/guide`    | How to use the admin.                                                                                                                                                                                                                                                                                                                                                           |
 
 The weeks and roster lists, the activity log, and the new week / player / squad forms, work on
@@ -702,6 +717,52 @@ pay that price or make a lower offer. There's no fee, and listings lapse after
 - **Notifications:** the seller hears about offers, sales and expired
   listings; the buyer hears whether their offer was accepted or declined.
 
+### 🎯 Bounties
+
+**Bounties** (`/bounties`, behind the `bounties` [feature flag](#-feature-flags))
+let a player put up 1–50 Clim Coin (`BOUNTY_REWARD_RANGE`) for a challenge
+("get a selfie with the CTO"). Other players in the season claim it, with an
+optional note, and the poster picks the winner. A player can have 3 open at
+once (`BOUNTY_OPEN_LIMIT`).
+
+- **Stored facts:** `bounties` (poster, title, reward, status, winner) and
+  `bounty_claims` (one per player per bounty).
+- **Escrow is derived:** an open bounty holds its reward from the poster's
+  wallet (`Wallet.held`, and the SQL `budget`), like a marketplace offer.
+  Awarding it moves the reward to the winner (`bounty-paid` / `bounty-won`
+  ledger lines, `Wallet.bountied`). Anything still open after 7 days
+  (`BOUNTY_DAYS`) reads as lapsed and the coins are free again; nothing has
+  to run.
+- **Rules:** the poster can take a bounty down only while nobody's claimed
+  it; after that they pick a winner, or it lapses. Players can't claim their
+  own, and claims and awards stay within the season.
+- **Writes** (`src/data/bounties.ts`): each is one statement that re-checks
+  the stored facts; posting runs under the poster's wallet lock and checks
+  their budget and open count. `runBountyAction` (`bounty-actions.ts`)
+  checks the rules against fresh rows first. Forms post to
+  `/account/bounties`.
+- **Moderation:** admins can award any open bounty to one of its claimants,
+  or cancel it, from `/admin/market#bounties`; their name is kept on it.
+- **Notifications:** the poster hears about each claim; the winner hears
+  they won.
+
+### 📈 Economy report
+
+`/admin/economy` (in the admin **activity** area) sums up one season's Clim
+Coin, derived from every player's wallet (`createEconomyQueries`), so it
+always agrees with what players see:
+
+- **Totals:** coins in circulation (spendable plus held), earned and
+  granted, spent and deducted, and passed between players.
+- **Supply by week** (UK Monday to Sunday): coins in, coins out and the
+  running total.
+- **By source:** task placements, entries, votes and predictions,
+  mini-tasks, skill perks, admin grants and deductions, shop purchases, eggs,
+  skill unlocks, gifts, the marketplace and bounties. Transfers count once,
+  on the receiving side.
+- **Top 10 holders**, and **shop sales and stock** per item (direct shop
+  purchases only, like limited stock) plus egg sales.
+
 ## 🧩 Mini-tasks & achievements
 
 **Mini-tasks** are small daily or bonus challenges between the weekly tasks,
@@ -741,6 +802,7 @@ is purged and the change shows straight away. Read them from
 | `mini_tasks`   | Hides the mini-task panels on the homepage and `/account`. Admins can still set mini-tasks and tick off completions, and coin already earned stays in wallets.                                                                                                           |
 | `achievements` | Hides `/account/achievements` (404) and its links.                                                                                                                                                                                                                       |
 | `marketplace`  | Hides `/market`, `/account/market` (404) and their links, the rules section and the wallet's sell links; nobody can list, buy or offer. Open listings and offers lapse on their own.                                                                                     |
+| `bounties`     | Hides `/bounties` (404), its nav and palette links and bounty notifications; nobody can post, claim or award. Open bounties keep their coins held until they lapse.                                                                                                      |
 
 ## 🔔 Notifications
 
@@ -780,16 +842,19 @@ which lists the feed with a "mark all read" button.
 
 Players sign in at `/login` (the same page admins use) with an email and
 password. Signing in takes them straight to the homepage (or back to the
-`/account` page that sent them to sign in). They edit **their own bio and
-avatar URL** at `/account`; changes are
-live immediately. Their Clim Coin wallet is a section of the same page (`/account#wallet`). Name, id, roster position, team and scores stay admin-only.
+`/account` page that sent them to sign in). They edit **their own bio** at
+`/account`; changes are live immediately. Their Clim Coin wallet is a section of the same page (`/account#wallet`). Name, id, avatar, roster position, team and scores stay admin-only.
 There is no public sign-up: admins invite players. Admins (including those
 who also play) land on `/admin` after signing in; an admin account without a
 player profile that tries to open `/account` is pointed to `/admin`.
 
 The navbar shows `login` to visitors. Once signed in it becomes an account
-menu (the person icon; a flat list in the mobile menu) with `profile` for
-players, `admin` for admins, and `logout`. Logging out is a `POST` to
+menu (the person icon; on phones, a collapsible section headed by their name
+and coin balance) with `profile` for players, `admin` for admins, and
+`logout`. The rest of the navbar keeps tasks, leaderboard and shop on the
+bar and groups everything else (play, clim coin, rankings, people) under
+`more`, which on phones is one collapsible section per group, with the
+current page's group open. The light/dark toggle is in the footer. Logging out is a `POST` to
 `/logout`. The session is only looked up when the request carries a Neon Auth
 session cookie, so anonymous page views make no auth call, and signed-in
 pages are sent `Cache-Control: private, no-store`.

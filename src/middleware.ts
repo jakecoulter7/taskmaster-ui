@@ -5,6 +5,7 @@ import {
   competitionCacheGeneration,
   invalidateCompetitionCache,
   loadCompetitionRows,
+  loadSeasonRows,
   type CompetitionRows,
   type CompetitionViewer,
 } from "./data/competition";
@@ -72,7 +73,9 @@ const app = defineMiddleware(async (context, next) => {
   // admin routes (only reached by admins, see below) see real task content
   // read straight from the database; everywhere else password-protected
   // tasks are redacted unless the visitor unlocked them, and the raw rows
-  // come from the per-data-centre cache (see `data/competition.ts`).
+  // come from the per-data-centre cache (see `data/competition.ts`). Those
+  // rows cover every season that isn't closed; a closed season's rows are
+  // only loaded when something asks for its snapshot.
   let rows: Promise<CompetitionRows> | undefined;
   let directory: Promise<SeasonDirectory> | undefined;
   let hallOfFame: Promise<HallOfFame> | undefined;
@@ -99,6 +102,9 @@ const app = defineMiddleware(async (context, next) => {
     let queries = queriesBySeason.get(season.id);
     if (!queries) {
       queries = loadRows()
+        .then((live) =>
+          loadSeasonRows(live, season, viewer, context.url.origin),
+        )
         .then((all) => buildCompetition(all, viewer, season))
         .then(createQueries);
       queriesBySeason.set(season.id, queries);

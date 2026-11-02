@@ -28,10 +28,7 @@ if (!player || player.mustChangePassword) {
   return Astro.redirect(withBase("/login"));
 }
 
-let values: FormValues = {
-  bio: player.bio ?? "",
-  avatarUrl: player.avatarUrl ?? "",
-};
+let values: FormValues = { bio: player.bio ?? "" };
 let errors: FieldErrors = {};
 
 // The player's wallet is per season: the season their roster row is in.
@@ -173,17 +170,8 @@ const avatarPreview = {
           rows={5}
           hint="Shown on your public player page. Up to 500 characters."
         />
-        <AdminField
-          label="avatar url"
-          name="avatarUrl"
-          type="url"
-          value={values.avatarUrl}
-          error={errors.avatarUrl}
-          placeholder="https://…"
-          hint="An https:// image link (or a /site path). Leave blank for a generated icon."
-        />
         <p class="text-xs text-ink-faint">
-          Your name, team and scores are managed by the Taskmaster.
+          Your name, avatar, team and scores are managed by the Taskmaster.
         </p>
         <button type="submit" class={btnPrimary}>save profile</button>
       </form>

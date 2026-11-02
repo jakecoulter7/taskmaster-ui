@@ -154,6 +154,19 @@ export const POWER_UP_KINDS = [
 export const isActivePowerUp = (kind: PowerUpKind): kind is ActivePowerUpKind =>
   ACTIVE_POWER_UP_KINDS.some((k) => k === kind);
 
+// ── Bounties (player-posted challenges) ──────────────────────────────
+
+/** Open bounties lapse this long after posting, freeing their coins. */
+export const BOUNTY_DAYS = 7;
+export const BOUNTY_MS = BOUNTY_DAYS * 24 * 60 * 60 * 1000;
+/** The rewards a bounty can offer, inclusive. */
+export const BOUNTY_REWARD_RANGE = { min: 1, max: 50 } as const;
+/** How many open bounties one player can have at once. */
+export const BOUNTY_OPEN_LIMIT = 3;
+export const BOUNTY_TITLE_MAX = 80;
+export const BOUNTY_DETAILS_MAX = 500;
+export const BOUNTY_NOTE_MAX = 200;
+
 // ── Marketplace (player-to-player resale) ─────────────────────────────
 
 /** Listings (and the offers on them) expire this long after listing. */

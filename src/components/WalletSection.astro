@@ -137,8 +137,12 @@ const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
           wallet.traded !== 0 &&
             ` · market ${wallet.traded > 0 ? "+" : ""}${wallet.traded}`
         }
+        {
+          wallet.bountied !== 0 &&
+            ` · bounties ${wallet.bountied > 0 ? "+" : ""}${wallet.bountied}`
+        }
         · spent {wallet.spent}
-        {wallet.held > 0 && ` · ${wallet.held} held in offers`}
+        {wallet.held > 0 && ` · ${wallet.held} held in offers & bounties`}
       </p>
     </div>
   </div>

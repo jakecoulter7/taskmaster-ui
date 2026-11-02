@@ -485,6 +485,51 @@ export function createNotificationQueries(
           ]
         : [];
 
+    // Bounties: claims on the player's open ones, and ones they won.
+    const bountyHref = (id: number) => withBase(`/bounties/${id}`);
+    const bountyById = new Map(
+      data.coins.bounties.bounties.map((b) => [b.id, b]),
+    );
+    const bountyEvents: FeedEvent[] =
+      playerId && data.features.bounties
+        ? [
+            ...data.coins.bounties.claims.flatMap((claim): FeedEvent[] => {
+              const bounty = bountyById.get(claim.bountyId);
+              if (bounty?.posterId !== playerId) return [];
+              const time = new Date(claim.at).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `bounty-claimed:${claim.id}`,
+                  kind: "bounty-claimed",
+                  title: `${playerName.get(claim.playerId) ?? "Someone"} claimed your bounty "${bounty.title}"`,
+                  detail: "pick a winner to pay it out",
+                  href: bountyHref(bounty.id),
+                  at: claim.at,
+                  time,
+                },
+              ];
+            }),
+            ...data.coins.bounties.bounties.flatMap((bounty): FeedEvent[] => {
+              if (bounty.status !== "awarded") return [];
+              if (bounty.winnerId !== playerId || !bounty.closedAt) return [];
+              const time = new Date(bounty.closedAt).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `bounty-won:${bounty.id}`,
+                  kind: "bounty-won",
+                  title: `You won ${bounty.reward} Clim Coin for "${bounty.title}"`,
+                  detail: `${playerName.get(bounty.posterId) ?? "Someone"}'s bounty`,
+                  href: bountyHref(bounty.id),
+                  at: bounty.closedAt,
+                  time,
+                },
+              ];
+            }),
+          ]
+        : [];
+
     const opened: FeedEvent[] = polls.flatMap((poll) => {
       const time = new Date(poll.opensAt).getTime();
       if (!poll.published || Number.isNaN(time) || time > now) return [];
@@ -517,6 +562,7 @@ export function createNotificationQueries(
       ...miniTaskDone,
       ...wishes,
       ...marketEvents,
+      ...bountyEvents,
       ...opened,
     ];
   }

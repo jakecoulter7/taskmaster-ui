@@ -423,7 +423,7 @@ const link = "text-cyan hover:underline";
           </li>
           <li>
             <span class="text-cyan" aria-hidden="true">&gt;</span> Players can edit
-            their own bio and avatar once signed in. Everything else (name, squad,
+            their own bio once signed in. Everything else (name, avatar, squad,
             scores) is admin-only.
           </li>
         </ul>
@@ -638,6 +638,21 @@ const link = "text-cyan hover:underline";
             in the activity log as <span class="text-ink">marketplace</span>.
           </li>
           <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span>{" "}
+            <a href={withBase("/bounties")} class={link}>Bounties</a> are behind
+            the <span class="text-ink">bounties</span> flag. Players put up 1–50
+            Clim Coin for a challenge (held from their wallet while it's open),
+            others claim it, and the poster picks the winner. A poster can only
+            take a bounty down before anyone claims it; unawarded bounties lapse
+            after 7 days and the coins go back. If a poster won't pick, step in on
+            the{" "}
+            <a href={withBase("/admin/market#bounties")} class={link}
+              >market screen</a
+            >: award it to one of the claimants or cancel it. Closing the season
+            cancels open bounties. Settled ones show in the activity log as{" "}
+            <span class="text-ink">bounties</span>.
+          </li>
+          <li>
             <span class="text-cyan" aria-hidden="true">&gt;</span> Power-ups used
             on a week are listed in its judge tab, where you can revoke one (its effect
             goes and the player gets that power-up back to use again; they can't buy
@@ -673,12 +688,22 @@ const link = "text-cyan hover:underline";
       <a href={withBase(ADMIN_ACTIVITY)} class={link}>activity</a> lists everything
       that moved points or Clim Coin in a season, newest first: score and bonus changes
       (who changed what, from and to), coin grants and deductions, item gifts, mini-task
-      ticks, purchases, crates, player gifts, power-ups, skills and wishes. Pick a
+      ticks, purchases, crates, player gifts, power-ups, skills, wishes, marketplace
+      sales and settled bounties. Pick a
       player under <span class="text-ink">who</span> to see only what affected them
       when someone queries their total, and use the season bar to look back at an
       older season. Each line links to where you can check or fix it. Things removed
       outright (a deleted coin grant, a revoked power-up) leave no line; score changes
       are logged from when the history began.
+    </p>
+    <p class={lead}>
+      For the big picture, the{" "}
+      <a href={withBase("/admin/economy")} class={link}>economy report</a> totals
+      the season's Clim Coin: what's in circulation (and held by offers and bounties),
+      what came in and went out each week, where it came from (placements, entries,
+      votes, mini-tasks, grants, the shop, eggs, skills, gifts, the market and bounties),
+      the top 10 holders, and each shop item's sales, revenue and stock left. Use it
+      to judge whether prices and payouts need tuning.
     </p>
   </section>
 

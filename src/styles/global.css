@@ -290,20 +290,6 @@ body::before {
   animation: skeleton-sweep 1.4s linear infinite;
 }
 
-/* ----------------------- theme toggle icon ------------------------ */
-/* The nav toggle shows a single glyph for the active theme — a moon in
-   dark mode, a sun in light mode. Driven purely by the data-theme attr
-   so it is correct on first paint, with no JS flash. */
-.theme-icon-sun {
-  display: none;
-}
-:root[data-theme="light"] .theme-icon-moon {
-  display: none;
-}
-:root[data-theme="light"] .theme-icon-sun {
-  display: inline-flex;
-}
-
 /* ------------------------- countdown urgency ---------------------- */
 /* Escalating treatment as a deadline approaches. Descendant selectors
    here outrank the digits' default `.text-acid`/`.text-glow` utilities. */
@@ -565,7 +551,9 @@ a[data-me-row].is-me {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 85;
+  /* Above the page, below the sticky nav (50) and its menus, panels and
+     the command palette, so it never walks over them. */
+  z-index: 45;
   width: 56px;
   height: 56px;
 }

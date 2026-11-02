@@ -7,6 +7,9 @@ import RuleItem from "../components/RuleItem.astro";
 import {
   MARKET_CRATE_ONLY_RANGE,
   MARKET_LISTING_DAYS,
+  BOUNTY_DAYS,
+  BOUNTY_OPEN_LIMIT,
+  BOUNTY_REWARD_RANGE,
   RARITIES,
   cratesOnSale,
 } from "../data/coin-rules";
@@ -640,6 +643,23 @@ const bonusRows: BonusRow[] = [
             )
           }
           {
+            features.bounties && (
+              <RuleItem accent="magenta">
+                <span class="font-bold text-ink">Bounties</span>: put up{" "}
+                {BOUNTY_REWARD_RANGE.min}–{BOUNTY_REWARD_RANGE.max} Clim Coin for
+                a challenge on the{" "}
+                <a href={withBase("/bounties")} class={link}>
+                  bounty board
+                </a>
+                . Other players claim it and you pick the winner, who gets the
+                coins. The reward is held from your wallet while it's open; you
+                can take it down until someone claims it, and anything unawarded
+                after {BOUNTY_DAYS} days lapses and the coins come back. Up to{" "}
+                {BOUNTY_OPEN_LIMIT} open at once, and you can't claim your own.
+              </RuleItem>
+            )
+          }
+          {
             features.shop_eggs && (
               <RuleItem accent="cyan">
                 <span class="font-bold text-ink">Mystery eggs</span> crack open
@@ -826,7 +846,7 @@ const bonusRows: BonusRow[] = [
             predictions, vote for People's Choice and react.
           </RuleItem>
           <RuleItem>
-            Edit your bio and avatar from your profile. The bell in the navbar
+            Edit your bio from your profile. The bell in the navbar
             tells you about new tasks and polls, deadline reminders, results,
             rank climbs and bonuses.
           </RuleItem>

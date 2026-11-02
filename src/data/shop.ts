@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { getDb } from "../db";
 import {
+  bounties,
   coinAdjustments,
   coinGifts,
   coinPurchases,
@@ -25,7 +26,11 @@ import {
   wishes,
 } from "../db/schema";
 import { violatedConstraint } from "./db-errors";
-import { GIFT_WEEKLY_CAP, MARKET_LISTING_DAYS } from "./coin-rules";
+import {
+  BOUNTY_DAYS,
+  GIFT_WEEKLY_CAP,
+  MARKET_LISTING_DAYS,
+} from "./coin-rules";
 
 // Clim Coin writes a player makes from `/account` (the middleware has
 // already required a signed-in player and purges the cached rows after).
@@ -36,6 +41,11 @@ import { GIFT_WEEKLY_CAP, MARKET_LISTING_DAYS } from "./coin-rules";
 export const listingLive = (listing: string) =>
   sql.raw(`(${listing}.status = 'open'
     and ${listing}.created_at > now() - interval '${MARKET_LISTING_DAYS} days')`);
+
+/** Whether `bounty` (a `bounties` alias) is open and unexpired. */
+export const bountyLive = (bounty: string) =>
+  sql.raw(`(${bounty}.status = 'open'
+    and ${bounty}.created_at > now() - interval '${BOUNTY_DAYS} days')`);
 
 /**
  * Whether `purchase` (a `coin_purchases` alias) is a copy its player still
@@ -64,10 +74,15 @@ const heldByOffers = (playerId: string, exceptListingId?: number) => sql`
       and ${listingLive("l")}
       ${exceptListingId === undefined ? sql`` : sql`and o.listing_id <> ${exceptListingId}`}), 0)`;
 
+/** The coins a player's open bounties hold. */
+const heldByBounties = (playerId: string) => sql`
+  coalesce((select sum(b.reward) from ${bounties} b
+    where b.poster_id = ${playerId} and ${bountyLive("b")}), 0)`;
+
 /**
  * The coins a player has left to spend, given their derived `earned`.
  * Pending marketplace offers hold coins, except one on `exceptListingId`
- * (the listing being paid for).
+ * (the listing being paid for), and so do their open bounties.
  */
 export const budget = (
   playerId: string,
@@ -91,7 +106,12 @@ export const budget = (
         where seller_id = ${playerId}), 0)
     - coalesce((select sum(price) from ${marketSales}
         where buyer_id = ${playerId}), 0)
-    - ${heldByOffers(playerId, exceptListingId)}`;
+    + coalesce((select sum(reward) from ${bounties}
+        where winner_id = ${playerId} and status = 'awarded'), 0)
+    - coalesce((select sum(reward) from ${bounties}
+        where poster_id = ${playerId} and status = 'awarded'), 0)
+    - ${heldByOffers(playerId, exceptListingId)}
+    - ${heldByBounties(playerId)}`;
 
 /**
  * Whether `item` (a `shop_items` alias) is in its sale window now. Windows

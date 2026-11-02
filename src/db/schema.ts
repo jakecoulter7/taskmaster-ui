@@ -95,6 +95,12 @@ export const marketOfferStatus = pgEnum("market_offer_status", [
   "declined",
   "withdrawn",
 ]);
+// Bounties also lapse by age when read (`expired` is derived, never stored).
+export const bountyStatus = pgEnum("bounty_status", [
+  "open",
+  "awarded",
+  "cancelled",
+]);
 export const loadoutSlot = pgEnum("loadout_slot", [
   "pet",
   "avatar",
@@ -1204,6 +1210,97 @@ export const marketSales = pgTable(
     index("market_sales_seller_id_idx").on(t.sellerId),
     index("market_sales_buyer_id_idx").on(t.buyerId),
     index("market_sales_item_id_idx").on(t.itemId),
+  ],
+);
+
+/**
+ * A Clim Coin bounty a player put up for a challenge. While it's open its
+ * reward is held from the poster's wallet (derived, like marketplace
+ * offers). The poster (or an admin) awards it to one claimant, which moves
+ * the reward to them; it can be cancelled while nobody's claimed it (an
+ * admin can cancel any). Open bounties also lapse by age (`BOUNTY_DAYS` in
+ * `coin-rules.ts`), derived when read, which frees the coins again. An
+ * admin who resolves one has their name copied in, like `market_listings`.
+ */
+export const bounties = pgTable(
+  "bounties",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    seasonId: seasonId(),
+    posterId: text().notNull(),
+    title: text().notNull(),
+    details: text(),
+    reward: integer().notNull(),
+    status: bountyStatus().notNull().default("open"),
+    winnerId: text(),
+    resolvedByName: text(),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    closedAt: timestamp({ withTimezone: true, mode: "string" }),
+  },
+  (t) => [
+    foreignKey({
+      name: "bounties_poster_season_fk",
+      columns: [t.posterId, t.seasonId],
+      foreignColumns: [players.id, players.seasonId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "bounties_winner_season_fk",
+      columns: [t.winnerId, t.seasonId],
+      foreignColumns: [players.id, players.seasonId],
+    }).onDelete("cascade"),
+    check("bounties_reward_range", sql`${t.reward} between 1 and 10000`),
+    check(
+      "bounties_title_length",
+      sql`char_length(${t.title}) between 1 and 80`,
+    ),
+    check(
+      "bounties_details_length",
+      sql`${t.details} is null or char_length(${t.details}) <= 500`,
+    ),
+    check(
+      "bounties_winner_when_awarded",
+      sql`(${t.status} = 'awarded') = (${t.winnerId} is not null)`,
+    ),
+    check(
+      "bounties_closed_when_not_open",
+      sql`(${t.status} = 'open') = (${t.closedAt} is null)`,
+    ),
+    check("bounties_winner_not_poster", sql`${t.winnerId} <> ${t.posterId}`),
+    index("bounties_season_id_idx").on(t.seasonId),
+    index("bounties_poster_id_idx").on(t.posterId),
+    index("bounties_winner_id_idx").on(t.winnerId),
+  ],
+);
+
+/**
+ * A player saying they've done a bounty, with an optional note (a link or
+ * how they did it). One per player per bounty; the poster picks the winner
+ * from these.
+ */
+export const bountyClaims = pgTable(
+  "bounty_claims",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    bountyId: integer()
+      .notNull()
+      .references(() => bounties.id, { onDelete: "cascade" }),
+    playerId: text()
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    note: text(),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("bounty_claims_one_per_player").on(t.bountyId, t.playerId),
+    check(
+      "bounty_claims_note_length",
+      sql`${t.note} is null or char_length(${t.note}) <= 200`,
+    ),
+    index("bounty_claims_player_id_idx").on(t.playerId),
   ],
 );
 

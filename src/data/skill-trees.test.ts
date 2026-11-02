@@ -502,6 +502,7 @@ describe("skill queries", () => {
           mini_tasks: false,
           achievements: false,
           marketplace: false,
+          bounties: false,
         },
         coins: coinData({
           items: [

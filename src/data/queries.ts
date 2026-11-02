@@ -49,6 +49,8 @@ import { createStreakQueries } from "./streak-queries";
 import { createWrappedQueries } from "./wrapped-queries";
 import { createCoinQueries } from "./coin-queries";
 import { createMarketQueries } from "./market-queries";
+import { createBountyQueries } from "./bounty-queries";
+import { createEconomyQueries } from "./economy-queries";
 import { createSkillQueries } from "./skill-queries";
 import { createMiniTaskQueries } from "./mini-task-queries";
 import { createAchievementQueries } from "./achievement-queries";
@@ -1328,10 +1330,25 @@ export function createQueries(data: CompetitionData) {
         ]
       : [];
 
+    const bountyItems: CommandPaletteItem[] = data.features.bounties
+      ? [
+          {
+            id: "page-bounties",
+            label: "Bounties",
+            group: "page",
+            href: withBase("/bounties"),
+            hint: "put up clim coin for a challenge, or claim one",
+            keywords:
+              "bounties bounty board challenge dare reward claim clim coin",
+          },
+        ]
+      : [];
+
     return [
       ...PALETTE_PAGES,
       ...skillItems,
       ...marketItems,
+      ...bountyItems,
       ...seasonItems,
       ...wrappedItems,
       ...taskItems,
@@ -1760,6 +1777,8 @@ export function createQueries(data: CompetitionData) {
     ...wrappedQueries,
     ...coinQueries,
     ...createMarketQueries(data, { getWallet: coinQueries.getWallet }),
+    ...createBountyQueries(data, { getWallet: coinQueries.getWallet }),
+    ...createEconomyQueries(data, { getWallet: coinQueries.getWallet }),
     ...createSkillQueries(data, {
       getBalance: (playerId) => coinQueries.getWallet(playerId).balance,
       getSkillPerks: coinQueries.getSkillPerks,

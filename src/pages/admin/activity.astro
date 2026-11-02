@@ -66,7 +66,11 @@ const kinds = Object.entries(ACTIVITY_KINDS) as [ActivityKind, string][];
   <p class="mt-1 max-w-prose text-sm text-ink-dim">
     Everything that moved points or Clim Coin this season, newest first: score
     and bonus changes, coin grants, gifts, purchases, crates, power-ups, skills,
-    wishes and mini-tasks. Filter by player to settle a dispute.
+    wishes, mini-tasks, the marketplace and bounties. Filter by player to settle
+    a dispute, or see the totals in the <a
+      href={withBase("/admin/economy")}
+      class="text-cyan hover:underline">economy report</a
+    >.
   </p>
 
   <form method="get" class="mt-6 flex flex-wrap items-end gap-3">

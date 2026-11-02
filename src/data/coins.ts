@@ -46,6 +46,7 @@ import type {
 import { timestamptzToIso, wallClockToIso } from "../lib/time";
 import { peoplesChoiceClosesAt } from "./peoples-choice";
 import { heldCoins } from "./market-mappers";
+import { bountyHeldCoins } from "./bounty-mappers";
 import type { DerivedBonusRow } from "./polls";
 import {
   DOUBLE_DOWN_POINTS,
@@ -834,6 +835,33 @@ export function deriveWallet(
       return [];
     },
   );
+  const bounties: CoinLedgerEntry[] = data.coins.bounties.bounties.flatMap(
+    (bounty): CoinLedgerEntry[] => {
+      if (bounty.status !== "awarded" || !bounty.winnerId) return [];
+      const at = bounty.closedAt ?? bounty.at;
+      if (bounty.posterId === playerId) {
+        return [
+          {
+            kind: "bounty-paid",
+            amount: -bounty.reward,
+            label: `Bounty "${bounty.title}" won by ${names.get(bounty.winnerId) ?? "someone"}`,
+            at,
+          },
+        ];
+      }
+      if (bounty.winnerId === playerId) {
+        return [
+          {
+            kind: "bounty-won",
+            amount: bounty.reward,
+            label: `Won ${names.get(bounty.posterId) ?? "someone"}'s bounty "${bounty.title}"`,
+            at,
+          },
+        ];
+      }
+      return [];
+    },
+  );
   const itemGifts: CoinLedgerEntry[] = data.coins.itemGifts
     .filter((g) => g.playerId === playerId)
     .map((g) => ({
@@ -857,16 +885,21 @@ export function deriveWallet(
   const spent = -sum(purchases);
   const gifted = sum(gifts);
   const traded = sum(trades);
-  // Pending marketplace offers hold coins until they're decided or lapse.
-  const held = heldCoins(data.coins.market, playerId, now);
+  const bountied = sum(bounties);
+  // Pending marketplace offers and open bounties hold coins until they're
+  // decided or lapse.
+  const held =
+    heldCoins(data.coins.market, playerId, now) +
+    bountyHeldCoins(data.coins.bounties, playerId, now);
   return {
     playerId,
-    balance: earned + adjusted - spent + gifted + traded - held,
+    balance: earned + adjusted - spent + gifted + traded + bountied - held,
     earned,
     adjusted,
     spent,
     gifted,
     traded,
+    bountied,
     held,
     ledger: [
       ...earnings,
@@ -874,6 +907,7 @@ export function deriveWallet(
       ...purchases,
       ...gifts,
       ...trades,
+      ...bounties,
       ...itemGifts,
       ...eggGifts,
     ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()),

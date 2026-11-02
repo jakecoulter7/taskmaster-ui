@@ -1,14 +1,19 @@
 import { z } from "astro/zod";
 import {
-  avatarUrlField,
   bioField,
   formValues,
   parseWith,
   type ParseResult,
 } from "./admin-forms";
-import type { MarketOutcome, PollSettings } from "../types";
+import type { BountyOutcome, MarketOutcome, PollSettings } from "../types";
 import {
   ACTIVE_POWER_UP_KINDS,
+  BOUNTY_DAYS,
+  BOUNTY_DETAILS_MAX,
+  BOUNTY_NOTE_MAX,
+  BOUNTY_OPEN_LIMIT,
+  BOUNTY_REWARD_RANGE,
+  BOUNTY_TITLE_MAX,
   GIFT_MESSAGE_MAX,
   GIFT_WEEKLY_CAP,
   LOADOUT_SLOTS,
@@ -17,22 +22,15 @@ import {
 } from "../data/coin-rules";
 
 // Validation for the player self-service forms under `/account`. Players can
-// only touch their bio and avatar; everything else stays admin-only.
+// only touch their bio; everything else (avatar included) stays admin-only.
 
-const profileSchema = z.object({
-  bio: bioField,
-  avatarUrl: avatarUrlField,
-});
+const profileSchema = z.object({ bio: bioField });
 
 export type ProfileInput = z.output<typeof profileSchema>;
 
 export function parseProfileForm(form: FormData): ParseResult<ProfileInput> {
   const values = formValues(form);
-  return parseWith(
-    profileSchema,
-    { bio: values.bio ?? "", avatarUrl: values.avatarUrl ?? "" },
-    values,
-  );
+  return parseWith(profileSchema, { bio: values.bio ?? "" }, values);
 }
 
 export const MIN_PASSWORD_LENGTH = 12;
@@ -372,4 +370,119 @@ export function describeMarketOutcome(outcome: MarketOutcome): {
   message: string;
 } {
   return MARKET_OUTCOMES[outcome];
+}
+
+// ── Bounties ──────────────────────────────────────────────────────────
+
+const optionalNote = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .transform((value) => value || undefined);
+
+const bountyActionSchema = z.discriminatedUnion("intent", [
+  z.object({
+    intent: z.literal("post"),
+    title: z.string().trim().min(1).max(BOUNTY_TITLE_MAX),
+    details: optionalNote(BOUNTY_DETAILS_MAX),
+    reward: coins.pipe(
+      z.number().min(BOUNTY_REWARD_RANGE.min).max(BOUNTY_REWARD_RANGE.max),
+    ),
+  }),
+  z.object({ intent: z.literal("cancel"), bountyId: rowId }),
+  z.object({
+    intent: z.literal("claim"),
+    bountyId: rowId,
+    note: optionalNote(BOUNTY_NOTE_MAX),
+  }),
+  z.object({ intent: z.literal("unclaim"), bountyId: rowId }),
+  z.object({
+    intent: z.literal("award"),
+    bountyId: rowId,
+    winnerId: z.string().trim().min(1).max(100),
+  }),
+]);
+
+/** A bounty action a player takes. */
+export type BountyAction = z.output<typeof bountyActionSchema>;
+
+/** A bounty form post, or `undefined` when it's malformed. */
+export function parseBountyAction(form: FormData): BountyAction | undefined {
+  const values = formValues(form);
+  const parsed = bountyActionSchema.safeParse({
+    intent: values.intent ?? "",
+    title: values.title ?? "",
+    details: values.details ?? "",
+    reward: values.reward ?? "",
+    bountyId: values.bountyId ?? "",
+    note: values.note ?? "",
+    winnerId: values.winnerId ?? "",
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+const BOUNTY_OUTCOMES: Record<
+  BountyOutcome,
+  { tone: "success" | "error"; message: string }
+> = {
+  posted: {
+    tone: "success",
+    message: `Bounty posted. The reward is held from your wallet until you pick a winner, take it down or it lapses after ${BOUNTY_DAYS} days.`,
+  },
+  cancelled: {
+    tone: "success",
+    message: "Bounty taken down. Your coins are free again.",
+  },
+  claimed: {
+    tone: "success",
+    message: "Claim sent. The poster picks the winner.",
+  },
+  unclaimed: { tone: "success", message: "Claim withdrawn." },
+  awarded: {
+    tone: "success",
+    message: "Bounty awarded. The reward's in the winner's wallet.",
+  },
+  invalid: {
+    tone: "error",
+    message: `That didn't work. Check the title (up to ${BOUNTY_TITLE_MAX} characters) and reward (${BOUNTY_REWARD_RANGE.min}–${BOUNTY_REWARD_RANGE.max}), or the bounty may have changed.`,
+  },
+  disabled: { tone: "error", message: "Bounties are switched off right now." },
+  "season-closed": {
+    tone: "error",
+    message: "The season's over, so bounties are closed.",
+  },
+  closed: {
+    tone: "error",
+    message: "That bounty has already been awarded, taken down or lapsed.",
+  },
+  "own-bounty": {
+    tone: "error",
+    message: "You can't claim your own bounty.",
+  },
+  "has-claims": {
+    tone: "error",
+    message:
+      "Someone's already claimed it, so it can't be taken down. Pick a winner, or ask the Taskmaster.",
+  },
+  limit: {
+    tone: "error",
+    message: `You already have ${BOUNTY_OPEN_LIMIT} open bounties. Settle one first.`,
+  },
+  unaffordable: {
+    tone: "error",
+    message:
+      "Not enough Clim Coin. Coins held by your offers and other bounties don't count.",
+  },
+};
+
+export const isBountyOutcome = (value: string): value is BountyOutcome =>
+  Object.hasOwn(BOUNTY_OUTCOMES, value);
+
+/** Message and tone for a bounty outcome, shown after the redirect. */
+export function describeBountyOutcome(outcome: BountyOutcome): {
+  tone: "success" | "error";
+  message: string;
+} {
+  return BOUNTY_OUTCOMES[outcome];
 }

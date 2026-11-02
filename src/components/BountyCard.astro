@@ -1,0 +1,70 @@
+---
+// One bounty as a card: the challenge, its reward, who posted it and how
+// it stands. The whole card links to the bounty's page, where claiming and
+// awarding happen.
+import type { BountyView } from "../types";
+import CoinAmount from "./CoinAmount.astro";
+import BountyStatusBadge from "./BountyStatusBadge.astro";
+import { timeLeftLabel } from "../lib/coin-ui";
+import { withBase } from "../lib/url";
+
+interface Props {
+  view: BountyView;
+  /** Show the state badge (lists that mix open and settled bounties). */
+  showStatus?: boolean;
+  class?: string;
+}
+
+const { view, showStatus = false, class: className } = Astro.props;
+const { bounty, poster, winner, status, expiresAt, claims } = view;
+const href = withBase(`/bounties/${bounty.id}`);
+---
+
+<article
+  class:list={[
+    "group relative flex min-w-0 flex-col gap-3 rounded-lg border border-grid bg-term-panel/60 p-4 transition-colors hover:border-acid/60",
+    className,
+  ]}
+>
+  <div class="flex items-start justify-between gap-3">
+    <h3 class="min-w-0 text-sm font-extrabold text-ink">
+      <a href={href} class="after:absolute after:inset-0 group-hover:text-acid">
+        {bounty.title}
+      </a>
+    </h3>
+    <CoinAmount amount={bounty.reward} class="shrink-0 text-sm text-amber" />
+  </div>
+  {
+    bounty.details && (
+      <p class="line-clamp-2 text-xs leading-relaxed text-ink-dim">
+        {bounty.details}
+      </p>
+    )
+  }
+  {showStatus && <BountyStatusBadge status={status} class="self-start" />}
+  <dl class="mt-auto grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+    <dt class="text-ink-faint">posted by</dt>
+    <dd class="truncate text-right text-ink-dim">{poster.name}</dd>
+    {
+      status === "open" ? (
+        <>
+          <dt class="text-ink-faint">ends</dt>
+          <dd class="text-right text-ink-dim">
+            <time datetime={expiresAt}>{timeLeftLabel(expiresAt)}</time>
+          </dd>
+          <dt class="text-ink-faint">claims</dt>
+          <dd class="text-right text-ink-dim">
+            {claims.length === 0 ? "none yet" : claims.length}
+          </dd>
+        </>
+      ) : (
+        winner && (
+          <>
+            <dt class="text-ink-faint">won by</dt>
+            <dd class="truncate text-right text-ink-dim">{winner.name}</dd>
+          </>
+        )
+      )
+    }
+  </dl>
+</article>

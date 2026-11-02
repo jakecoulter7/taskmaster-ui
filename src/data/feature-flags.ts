@@ -40,6 +40,11 @@ export const FEATURE_FLAGS: Record<
     description:
       "Opens /market: players list pets, avatars, cosmetics, egg exclusives and unused power-ups (not Shield, Mirror or Insurance) for Clim Coin, buy each other's listings and make offers. Listings expire after 7 days. Off: the market, its links and the wallet's sell buttons are hidden and nobody can list, buy or offer; open listings and offers stay put (offered coins stay held) until they expire or it's back on.",
   },
+  bounties: {
+    label: "Bounties",
+    description:
+      "Opens /bounties: players put up 1–50 Clim Coin for a challenge, others claim it and the poster picks a winner (admins can award or cancel any from /admin/market). The reward is held while it's open; bounties lapse after 7 days and the coins go back. Off: the board and its links are hidden and nobody can post, claim or award; open bounties stay put (their coins stay held) until they lapse or it's back on.",
+  },
 };
 
 export const FEATURE_FLAG_KEYS = Object.keys(FEATURE_FLAGS) as FeatureFlagKey[];

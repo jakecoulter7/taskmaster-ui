@@ -1122,7 +1122,9 @@ export type NotificationKind =
   | "market-sold"
   | "offer-accepted"
   | "offer-declined"
-  | "listing-expired";
+  | "listing-expired"
+  | "bounty-claimed"
+  | "bounty-won";
 
 /** One entry in a player's notification feed. */
 export interface NotificationItem {
@@ -1610,7 +1612,8 @@ export type FeatureFlagKey =
   | "skill_trees"
   | "mini_tasks"
   | "achievements"
-  | "marketplace";
+  | "marketplace"
+  | "bounties";
 
 /** Whether each feature is on. */
 export type FeatureFlags = Record<FeatureFlagKey, boolean>;
@@ -1952,6 +1955,8 @@ export interface ClimCoinData {
   miniTaskCompletions: MiniTaskCompletion[];
   /** The player-to-player marketplace, this season's rows, oldest first. */
   market: MarketData;
+  /** Bounties this season's players posted, and their claims. */
+  bounties: BountyData;
 }
 
 // ── Marketplace ───────────────────────────────────────────────────────
@@ -2021,6 +2026,218 @@ export interface MarketData {
   listings: MarketListing[];
   offers: MarketOffer[];
   sales: MarketSale[];
+}
+
+// ── Bounties ──────────────────────────────────────────────────────────
+
+/** A bounty's stored state. */
+export type StoredBountyStatus = "open" | "awarded" | "cancelled";
+/** A bounty's state; an open one past its deadline reads as `expired`. */
+export type BountyStatus = StoredBountyStatus | "expired";
+
+/** A Clim Coin bounty a player put up (a `bounties` row). */
+export interface Bounty {
+  id: number;
+  posterId: string;
+  title: string;
+  details?: string;
+  reward: number;
+  status: StoredBountyStatus;
+  winnerId?: string;
+  /** Set when an admin awarded or cancelled it. */
+  resolvedByName?: string;
+  at: string;
+  closedAt?: string;
+}
+
+/** A player saying they did a bounty. */
+export interface BountyClaim {
+  id: number;
+  bountyId: number;
+  playerId: string;
+  note?: string;
+  at: string;
+}
+
+export interface BountyData {
+  /** Oldest first. */
+  bounties: Bounty[];
+  /** Oldest first. */
+  claims: BountyClaim[];
+}
+
+export interface BountyClaimView {
+  claim: BountyClaim;
+  player: Player;
+}
+
+/** A bounty as the board shows it. */
+export interface BountyView {
+  bounty: Bounty;
+  /** Derived (expiry applied). */
+  status: BountyStatus;
+  poster: Player;
+  winner?: Player;
+  /** When it lapses if nobody wins it. */
+  expiresAt: string;
+  /** Oldest first. */
+  claims: BountyClaimView[];
+}
+
+/** Why a player can't post a bounty right now. */
+export type BountyPostBlock =
+  | "guest"
+  | "disabled"
+  | "season-closed"
+  | "limit"
+  | "unaffordable";
+
+/** Why a player can't claim a bounty. */
+export type BountyClaimBlock =
+  | "guest"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "own-bounty";
+
+/** The bounty board: what's open and what's been settled. */
+export interface BountyBoard {
+  /** Open bounties, biggest reward first. */
+  open: BountyView[];
+  /** Awarded, cancelled and lapsed bounties, newest first. */
+  settled: BountyView[];
+}
+
+/** What a player can do about posting a bounty. */
+export interface BountyPostPanel {
+  blocked?: BountyPostBlock;
+  /** Coins they can put up now (signed-in players only). */
+  available?: number;
+  /** Their open bounties. */
+  openCount: number;
+}
+
+/** One bounty as a viewer sees it. */
+export interface BountyDetail {
+  view: BountyView;
+  isPoster: boolean;
+  claimBlocked?: BountyClaimBlock;
+  myClaim?: BountyClaim;
+  /** The poster can pick a winner (it's open and has claims). */
+  canAward: boolean;
+  /** The poster can take it down (it's open and nobody's claimed it). */
+  canCancel: boolean;
+}
+
+/** Outcome of a bounty action, shown after the redirect. */
+export type BountyOutcome =
+  | "posted"
+  | "cancelled"
+  | "claimed"
+  | "unclaimed"
+  | "awarded"
+  | "invalid"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "own-bounty"
+  | "has-claims"
+  | "limit"
+  | "unaffordable";
+
+// ── Clim Coin economy (admin dashboard) ───────────────────────────────
+
+/**
+ * How a ledger line moves coins through the economy: `earned` and
+ * `granted` bring coins in, `spent` takes them out of circulation, and
+ * `moved` passes them between players (net zero across the season).
+ */
+export type EconomyFlow = "earned" | "granted" | "spent" | "moved";
+
+/** Where coins came from or went, e.g. task placements or crates. */
+export type EconomySource =
+  | "placements"
+  | "entries"
+  | "votes"
+  | "mini-tasks"
+  | "skill-perks"
+  | "grants"
+  | "deductions"
+  | "shop"
+  | "crates"
+  | "skills"
+  | "gifts"
+  | "market"
+  | "bounties";
+
+export interface EconomySourceRow {
+  source: EconomySource;
+  flow: EconomyFlow;
+  label: string;
+  /** Coins through this source (always positive; `flow` gives direction). */
+  amount: number;
+  /** Ledger lines behind it. */
+  count: number;
+}
+
+/** One week of the coin supply, Monday to Sunday (UK). */
+export interface EconomyWeek {
+  /** The Monday the week starts (ISO date, `YYYY-MM-DD`). */
+  weekStart: string;
+  /** Coins earned and granted that week. */
+  minted: number;
+  /** Coins spent (and deducted) that week. */
+  burned: number;
+  /** Coins in circulation at the end of the week. */
+  circulating: number;
+}
+
+export interface EconomyHolder {
+  player: Player;
+  /** What they can spend now. */
+  balance: number;
+  /** Held by their offers and bounties. */
+  held: number;
+}
+
+/** A shop item's sales this season. */
+export interface EconomyShopRow {
+  item: ShopItem;
+  /** Copies bought from the shop (not eggs, gifts, skills or resales). */
+  sold: number;
+  revenue: number;
+  /** Limited-stock items only. */
+  stockLeft?: number;
+  onSale: boolean;
+}
+
+/** A mystery egg's sales this season. */
+export interface EconomyCrateRow {
+  crateId: string;
+  name: string;
+  opened: number;
+  revenue: number;
+}
+
+/** The season's Clim Coin economy, for `/admin/economy`. */
+export interface EconomyReport {
+  /** Coins players hold: spendable plus held. */
+  circulating: number;
+  /** Of which held by open offers and bounties. */
+  held: number;
+  minted: number;
+  burned: number;
+  /** Coins passed between players (gifts, market, bounties). */
+  moved: number;
+  /** Biggest first within each flow. */
+  sources: EconomySourceRow[];
+  /** Oldest first, from the first week with any coin activity. */
+  weeks: EconomyWeek[];
+  /** Richest first. */
+  holders: EconomyHolder[];
+  /** Best-selling first; only items that sold or are on sale. */
+  shop: EconomyShopRow[];
+  crates: EconomyCrateRow[];
 }
 
 /** How the market page orders open listings. */
@@ -2123,7 +2340,7 @@ export interface PlayerMarket {
   offersReceived: MarketOfferView[];
   /** What they own that could go on sale. */
   listable: ListableItem[];
-  /** Coins held by their pending offers. */
+  /** Coins held by their pending offers (and open bounties). */
   held: number;
 }
 
@@ -2181,7 +2398,11 @@ export type CoinLedgerKind =
   /** Coins from selling an item on the marketplace. */
   | "market-sale"
   /** Coins spent buying an item on the marketplace. */
-  | "market-buy";
+  | "market-buy"
+  /** A bounty's reward, paid by its poster when they award it. */
+  | "bounty-paid"
+  /** A bounty's reward, won. */
+  | "bounty-won";
 
 /** One line in a wallet's history. */
 export interface CoinLedgerEntry {
@@ -2206,7 +2427,9 @@ export interface Wallet {
   gifted: number;
   /** Marketplace sales minus marketplace buys. */
   traded: number;
-  /** Coins held by their pending marketplace offers. */
+  /** Bounty rewards won minus bounty rewards paid out. */
+  bountied: number;
+  /** Coins held by their pending marketplace offers and open bounties. */
   held: number;
   /** Newest first. */
   ledger: CoinLedgerEntry[];
@@ -2645,7 +2868,8 @@ export type ActivityKind =
   | "power-up"
   | "skill"
   | "wish"
-  | "market";
+  | "market"
+  | "bounty";
 
 /** One line in the admin activity log. */
 export interface ActivityEntry {

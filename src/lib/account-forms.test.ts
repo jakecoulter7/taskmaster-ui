@@ -28,42 +28,30 @@ function errorsOf<T>(result: ParseResult<T>) {
 }
 
 describe("parseProfileForm", () => {
-  it("parses a bio and avatar", () => {
-    expect(
-      parseProfileForm(
-        formData({ bio: " Likes engines. ", avatarUrl: "/avatars/ada.png" }),
-      ),
-    ).toEqual({
+  it("parses a bio", () => {
+    expect(parseProfileForm(formData({ bio: " Likes engines. " }))).toEqual({
       ok: true,
-      data: { bio: "Likes engines.", avatarUrl: "/avatars/ada.png" },
-      values: { bio: " Likes engines. ", avatarUrl: "/avatars/ada.png" },
+      data: { bio: "Likes engines." },
+      values: { bio: " Likes engines. " },
     });
   });
 
-  it("clears blank fields", () => {
+  it("clears a blank bio", () => {
     const result = parseProfileForm(formData());
-    expect(result.ok && result.data).toEqual({ bio: null, avatarUrl: null });
+    expect(result.ok && result.data).toEqual({ bio: null });
   });
 
-  it("ignores fields players can't change", () => {
-    const result = parseProfileForm(formData({ name: "Mallory", id: "x" }));
-    expect(result.ok && result.data).toEqual({ bio: null, avatarUrl: null });
+  it("ignores fields players can't change, avatar included", () => {
+    const result = parseProfileForm(
+      formData({ name: "Mallory", id: "x", avatarUrl: "/avatars/ada.png" }),
+    );
+    expect(result.ok && result.data).toEqual({ bio: null });
   });
 
-  it("rejects a long bio and a bad avatar", () => {
+  it("rejects a long bio", () => {
     expect(
-      errorsOf(
-        parseProfileForm(
-          formData({
-            bio: "b".repeat(501),
-            avatarUrl: "http://example.com/a.png",
-          }),
-        ),
-      ),
-    ).toEqual({
-      bio: "Keep it under 500 characters.",
-      avatarUrl: "Use an https:// URL or a site path starting with /.",
-    });
+      errorsOf(parseProfileForm(formData({ bio: "b".repeat(501) }))),
+    ).toEqual({ bio: "Keep it under 500 characters." });
   });
 });
 

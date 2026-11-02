@@ -29,6 +29,7 @@ export const ACTIVITY_KINDS: Record<ActivityKind, string> = {
   skill: "skills",
   wish: "wishes",
   market: "marketplace",
+  bounty: "bounties",
 };
 
 export const isActivityKind = (value: string): value is ActivityKind =>
@@ -229,6 +230,28 @@ export function createActivityQueries(data: CompetitionData) {
           href: playerHref(sale.buyerId),
         }),
       ),
+      // Settled bounties: who won (or that it was taken down), and who did
+      // it. Open and lapsed ones moved no coins.
+      ...coins.bounties.bounties.flatMap((b): ActivityEntry[] => {
+        if (b.status === "open" || !b.closedAt) return [];
+        const awarded = b.status === "awarded" && b.winnerId !== undefined;
+        return [
+          {
+            id: `bounty:${b.id}`,
+            kind: "bounty",
+            at: b.closedAt,
+            actor: b.resolvedByName ?? nameOf(b.posterId),
+            byAdmin: b.resolvedByName !== undefined,
+            subjectIds: [b.posterId, ...(b.winnerId ? [b.winnerId] : [])],
+            summary: awarded
+              ? `${nameOf(b.posterId)}'s bounty paid ${nameOf(b.winnerId!)}`
+              : `${nameOf(b.posterId)}'s bounty was taken down`,
+            detail: b.title,
+            ...(awarded && { coins: b.reward }),
+            href: `/bounties/${b.id}`,
+          },
+        ];
+      }),
       ...coins.uses.map(
         (u): ActivityEntry => ({
           id: `power-up:${u.id}`,

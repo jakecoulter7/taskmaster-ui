@@ -6,6 +6,7 @@ export const ADMIN_SEASONS = "/admin/seasons";
 export const ADMIN_ROSTER = "/admin/roster";
 export const ADMIN_SITE = "/admin/site";
 export const ADMIN_ACTIVITY = "/admin/activity";
+export const ADMIN_ECONOMY = "/admin/economy";
 export const ADMIN_GUIDE = "/admin/guide";
 
 /**
@@ -35,9 +36,9 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: ADMIN_SITE,
     label: "site",
     title: "Polls, mini-tasks, changelog & shop",
-    hint: "feature flags, homepage polls, mini-tasks, the what's new list, the Clim Coin shop and marketplace",
+    hint: "feature flags, homepage polls, mini-tasks, the what's new list, the Clim Coin shop, marketplace and bounties",
     keywords:
-      "feature flags toggles switches enable disable polls votes questions mini-tasks daily bonus side quests tick off completions changelog whats new release notes clim coin shop pets avatars cosmetics power-ups items prices mystery eggs crates marketplace market listings offers trades take down",
+      "feature flags toggles switches enable disable polls votes questions mini-tasks daily bonus side quests tick off completions changelog whats new release notes clim coin shop pets avatars cosmetics power-ups items prices mystery eggs crates marketplace market listings offers trades take down bounties bounty award claims refund",
     match: [
       "/admin/polls",
       "/admin/mini-tasks",
@@ -50,9 +51,10 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     href: ADMIN_ACTIVITY,
     label: "activity",
     title: "Check the activity log",
-    hint: "one timeline of score changes, coin grants, gifts, purchases and mini-tasks",
+    hint: "one timeline of score changes, coin grants, gifts, purchases and mini-tasks, plus the Clim Coin economy report",
     keywords:
-      "activity log audit history timeline disputes who changed what score changes coin adjustments grants deductions gifts purchases crates power-ups sabotage skills wishes mini-tasks",
+      "activity log audit history timeline disputes who changed what score changes coin adjustments grants deductions gifts purchases crates power-ups sabotage skills wishes mini-tasks bounties economy circulation supply inflation balance prices top holders richest shop sales stock revenue",
+    match: [ADMIN_ECONOMY],
   },
   {
     href: ADMIN_GUIDE,

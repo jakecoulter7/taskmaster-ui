@@ -20,6 +20,8 @@ interface Props {
   achievements?: boolean;
   /** The marketplace feature flag: links `/market` when on. */
   market?: boolean;
+  /** The bounties feature flag: links `/bounties` when on. */
+  bounties?: boolean;
 }
 
 const {
@@ -29,6 +31,7 @@ const {
   skillTrees = false,
   achievements = false,
   market = false,
+  bounties = false,
 } = Astro.props;
 
 interface NavItem {
@@ -42,23 +45,32 @@ interface NavGroup {
 }
 
 // The most-visited pages sit directly on the bar; everything else is grouped
-// by intent under one "more" menu. Home stays reachable via the brand link,
-// and every page is also in the ⌘K command palette.
+// by intent under one "more" menu (collapsible sections on phones). Home
+// stays reachable via the brand link, and every page is also in the ⌘K
+// command palette. Each primary link heads one of the groups below.
 const primaryLinks: NavItem[] = [
   { href: "/tasks", label: "tasks" },
   { href: "/leaderboard", label: "leaderboard" },
   { href: "/shop", label: "shop" },
 ];
 
+// Feature-flagged pages join their group when on; a group left empty (the
+// Clim Coin extras with every flag off) isn't shown.
 const moreGroups: NavGroup[] = [
   {
-    label: "compete",
+    label: "play",
     children: [
       { href: "/live", label: "live" },
       { href: "/recaps", label: "recaps" },
-      ...(skillTrees ? [{ href: "/skills", label: "skill trees" }] : []),
-      ...(market ? [{ href: "/market", label: "marketplace" }] : []),
       { href: "/rules", label: "rules" },
+    ],
+  },
+  {
+    label: "clim coin",
+    children: [
+      ...(market ? [{ href: "/market", label: "marketplace" }] : []),
+      ...(bounties ? [{ href: "/bounties", label: "bounties" }] : []),
+      ...(skillTrees ? [{ href: "/skills", label: "skill trees" }] : []),
     ],
   },
   {
@@ -76,7 +88,7 @@ const moreGroups: NavGroup[] = [
       { href: "/compare", label: "compare" },
     ],
   },
-];
+].filter((group) => group.children.length > 0);
 
 const path = Astro.url.pathname;
 const isActive = (href: string) => {
@@ -113,6 +125,9 @@ const utilityBox =
   "inline-flex h-[34px] shrink-0 items-center rounded border text-xs transition-colors";
 const menuLink =
   "group/item flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm tracking-wide transition-colors";
+// A collapsible mobile menu section's header row (hides the native marker).
+const mobileSummary =
+  "flex cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm tracking-wide [&::-webkit-details-marker]:hidden";
 ---
 
 <header
@@ -255,7 +270,7 @@ const menuLink =
       class="mx-1 hidden h-5 w-px bg-grid min-[1100px]:block"
       aria-hidden="true"></span>
 
-    <!-- Utilities: search · coins · notifications · theme · account -->
+    <!-- Utilities: search · coins · notifications · account (the theme toggle is in the footer) -->
     <div class="flex shrink-0 items-center gap-2">
       <button
         type="button"
@@ -270,7 +285,7 @@ const menuLink =
       >
         <span class="text-acid" aria-hidden="true">$</span>
         <kbd
-          class="rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint"
+          class="rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint pointer-coarse:hidden"
           aria-hidden="true">⌘K</kbd
         >
       </button>
@@ -286,45 +301,6 @@ const menuLink =
           <NotificationBell unreadCount={notifications.unreadCount} />
         )
       }
-
-      <button
-        type="button"
-        data-theme-toggle
-        aria-label="Toggle light / dark theme"
-        title="Toggle light / dark theme"
-        class:list={[
-          utilityBox,
-          "w-[34px] justify-center border-grid text-ink-dim hover:border-ink-faint hover:text-acid max-sm:hidden",
-        ]}
-      >
-        <svg
-          class="theme-icon-moon h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-        </svg>
-        <svg
-          class="theme-icon-sun h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="4"></circle>
-          <path
-            d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"
-          ></path>
-        </svg>
-      </button>
 
       {
         viewer ? (
@@ -449,14 +425,16 @@ const menuLink =
     </div>
   </nav>
 
-  <!-- Mobile menu: pages first, then account, then utilities -->
+  <!-- Mobile menu: the top pages, then each group (and the account) as a
+       collapsible section, one open at a time, then search. The group
+       holding the current page starts open. -->
   <div
     id="mobile-menu"
     class="hidden max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-grid bg-term-panel min-[1100px]:hidden"
   >
     <ul class="mx-auto max-w-6xl px-4 py-2 sm:px-6">
       <li class="border-b border-grid-soft py-2">
-        <ul class="grid grid-cols-2 gap-x-4">
+        <ul class="flex flex-wrap justify-between gap-x-4">
           {
             primaryLinks.map((link) => (
               <li>
@@ -464,7 +442,7 @@ const menuLink =
                   href={withBase(link.href)}
                   aria-current={isActive(link.href) ? "page" : undefined}
                   class:list={[
-                    "flex items-center gap-2 py-2 text-sm font-bold tracking-wide",
+                    "flex items-center gap-1.5 py-2 text-sm font-bold tracking-wide",
                     isActive(link.href) ? "text-acid" : "text-ink",
                   ]}
                 >
@@ -483,137 +461,163 @@ const menuLink =
         </ul>
       </li>
       {
-        moreGroups.map((group) => (
-          <li class="border-b border-grid-soft py-2">
-            <p class="py-1 text-[10px] uppercase tracking-[0.25em] text-ink-faint">
-              {group.label}
-            </p>
-            <ul class="grid grid-cols-2 gap-x-4">
-              {group.children.map((child) => (
-                <li>
-                  <a
-                    href={withBase(child.href)}
-                    aria-current={isActive(child.href) ? "page" : undefined}
-                    class:list={[
-                      "flex items-center gap-2 py-2 text-sm tracking-wide",
-                      isActive(child.href) ? "text-acid" : "text-ink-dim",
-                    ]}
-                  >
+        moreGroups.map((group) => {
+          const open = group.children.some((child) => isActive(child.href));
+          return (
+            <li class="border-b border-grid-soft">
+              <details name="mobile-nav-section" open={open} class="group/section">
+                <summary class:list={[mobileSummary, open ? "text-acid" : "text-ink-dim"]}>
+                  <span>
+                    <span class="text-ink-faint">./</span>
+                    {group.label}/
+                  </span>
+                  <span class="text-[10px] tracking-widest text-ink-faint">
+                    {group.children.length}
                     <span
+                      class="ml-1 inline-block transition-transform group-open/section:rotate-180"
+                      aria-hidden="true"
+                    >
+                      ▾
+                    </span>
+                  </span>
+                </summary>
+                <ul class="grid grid-cols-2 gap-x-4 pb-2 pl-4">
+                  {group.children.map((child) => (
+                    <li>
+                      <a
+                        href={withBase(child.href)}
+                        aria-current={isActive(child.href) ? "page" : undefined}
+                        class:list={[
+                          "flex items-center gap-2 py-2 text-sm tracking-wide",
+                          isActive(child.href) ? "text-acid" : "text-ink-dim",
+                        ]}
+                      >
+                        <span
+                          class:list={[
+                            isActive(child.href)
+                              ? "text-acid"
+                              : "text-ink-faint",
+                          ]}
+                        >
+                          ./
+                        </span>
+                        {child.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </li>
+          );
+        })
+      }
+      {
+        viewer ? (
+          <li class="border-b border-grid-soft">
+            <details
+              name="mobile-nav-section"
+              open={isAccountActive}
+              class="group/section"
+            >
+              <summary
+                class:list={[
+                  mobileSummary,
+                  isAccountActive ? "text-acid" : "text-ink-dim",
+                ]}
+              >
+                <span class="flex min-w-0 items-center gap-1">
+                  <span class="text-ink-faint">~/</span>
+                  <span class="truncate">{viewer.name}</span>
+                </span>
+                <span class="flex shrink-0 items-center gap-2 text-[10px] tracking-widest text-ink-faint">
+                  {coinBalance !== undefined && (
+                    <CoinAmount
+                      amount={coinBalance}
                       class:list={[
-                        isActive(child.href) ? "text-acid" : "text-ink-faint",
+                        "text-xs",
+                        coinBalance < 0 ? "text-danger" : "text-amber",
+                      ]}
+                    />
+                  )}
+                  <span
+                    class="inline-block transition-transform group-open/section:rotate-180"
+                    aria-hidden="true"
+                  >
+                    ▾
+                  </span>
+                </span>
+              </summary>
+              <ul class="grid grid-cols-2 gap-x-4 pb-2 pl-4">
+                {coinBalance !== undefined && (
+                  <li>
+                    <a
+                      href={withBase("/account#wallet")}
+                      class="flex items-center gap-2 py-2 text-sm tracking-wide text-ink-dim"
+                    >
+                      <span class="text-ink-faint">~/</span>
+                      wallet
+                    </a>
+                  </li>
+                )}
+                {accountLinks.map((link) => (
+                  <li>
+                    <a
+                      href={withBase(link.href)}
+                      aria-current={isActive(link.href) ? "page" : undefined}
+                      class:list={[
+                        "flex items-center gap-2 py-2 text-sm tracking-wide",
+                        isActive(link.href) ? "text-acid" : "text-ink-dim",
                       ]}
                     >
-                      ./
-                    </span>
-                    {child.label}
-                  </a>
+                      <span
+                        class:list={[
+                          isActive(link.href) ? "text-acid" : "text-ink-faint",
+                        ]}
+                      >
+                        ~/
+                      </span>
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+                <li>
+                  <form method="post" action={withBase("/logout")}>
+                    <button
+                      type="submit"
+                      class="flex w-full items-center gap-2 py-2 text-left text-sm tracking-wide text-ink-dim"
+                    >
+                      <span class="text-ink-faint">~/</span>
+                      logout
+                    </button>
+                  </form>
                 </li>
-              ))}
-            </ul>
+              </ul>
+            </details>
           </li>
-        ))
+        ) : (
+          <li class="border-b border-grid-soft">
+            <a
+              href={withBase("/login")}
+              aria-current={isActive("/login") ? "page" : undefined}
+              class="flex items-center gap-2 py-3 text-sm tracking-wide text-acid"
+            >
+              <span>~/</span>
+              login
+            </a>
+          </li>
+        )
       }
-      <li class="border-b border-grid-soft py-2">
-        {
-          viewer && (
-            <p class="truncate py-1 text-[10px] uppercase tracking-[0.25em] text-ink-faint">
-              signed in as {viewer.name}
-            </p>
-          )
-        }
-        <ul class="grid grid-cols-2 gap-x-4">
-          {
-            coinBalance !== undefined && (
-              <li class="col-span-2 sm:hidden">
-                <a
-                  href={withBase("/account#wallet")}
-                  class="flex items-center gap-2 py-2 text-sm tracking-wide text-ink-dim"
-                >
-                  <span class="text-ink-faint">~/</span>
-                  wallet
-                  <CoinAmount
-                    amount={coinBalance}
-                    class:list={[
-                      "ml-auto",
-                      coinBalance < 0 ? "text-danger" : "text-amber",
-                    ]}
-                  />
-                </a>
-              </li>
-            )
-          }
-          {
-            accountLinks.map((link) => (
-              <li>
-                <a
-                  href={withBase(link.href)}
-                  aria-current={isActive(link.href) ? "page" : undefined}
-                  class:list={[
-                    "flex items-center gap-2 py-2 text-sm tracking-wide",
-                    isActive(link.href)
-                      ? "text-acid"
-                      : viewer
-                        ? "text-ink-dim"
-                        : "text-acid",
-                  ]}
-                >
-                  <span
-                    class:list={[
-                      isActive(link.href) || !viewer
-                        ? "text-acid"
-                        : "text-ink-faint",
-                    ]}
-                  >
-                    ~/
-                  </span>
-                  {link.label}
-                </a>
-              </li>
-            ))
-          }
-          {
-            viewer && (
-              <li>
-                <form method="post" action={withBase("/logout")}>
-                  <button
-                    type="submit"
-                    class="flex w-full items-center gap-2 py-2 text-left text-sm tracking-wide text-ink-dim"
-                  >
-                    <span class="text-ink-faint">~/</span>
-                    logout
-                  </button>
-                </form>
-              </li>
-            )
-          }
-        </ul>
-      </li>
       <li>
         <button
           type="button"
           data-command-palette-trigger
-          class="flex w-full items-center gap-2 border-b border-grid-soft py-3 text-left text-sm tracking-wide text-ink-dim sm:border-b-0"
+          class="flex w-full items-center gap-2 py-3 text-left text-sm tracking-wide text-ink-dim"
         >
           <span class="text-acid">$</span>
           search
           <kbd
-            class="ml-auto rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint"
+            class="ml-auto rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint pointer-coarse:hidden"
             >⌘K</kbd
-          >
-        </button>
-      </li>
-      <li class="sm:hidden">
-        <button
-          type="button"
-          data-theme-toggle
-          aria-label="Toggle colour theme"
-          class="flex w-full items-center gap-2 py-3 text-left text-sm tracking-wide text-ink-dim"
-        >
-          <span class="text-acid">$</span>
-          theme
-          <span data-theme-state class="ml-auto tracking-widest text-ink-faint"
-            >--dark</span
           >
         </button>
       </li>
@@ -624,15 +628,6 @@ const menuLink =
 {notifications && <NotificationPanel feed={notifications} />}
 
 <script>
-  import {
-    applyTheme,
-    getActiveTheme,
-    isTheme,
-    THEME_CHANGE_EVENT,
-    THEME_META_COLOR,
-    type ThemeName,
-  } from "../lib/theme";
-
   const toggle = document.getElementById("nav-toggle");
   const menu = document.getElementById("mobile-menu");
   const label = document.getElementById("nav-toggle-label");
@@ -682,37 +677,5 @@ const menuLink =
   document.addEventListener("click", () => closeAllDropdowns());
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeAllDropdowns();
-  });
-
-  // ---- Theme toggle --------------------------------------------------
-  // The nav button is the quick dark/light switch; the exotic CRT phosphor
-  // themes are summoned from the command palette. This widget just reflects
-  // whatever theme is active — including those palette-triggered changes —
-  // by listening for the shared theme-change event.
-  const themeMeta = document.querySelector('meta[name="theme-color"]');
-  const stateLabels = document.querySelectorAll("[data-theme-state]");
-
-  const reflectTheme = (theme: ThemeName) => {
-    themeMeta?.setAttribute("content", THEME_META_COLOR[theme]);
-    stateLabels.forEach((el) => {
-      el.textContent = `--${theme}`;
-    });
-  };
-
-  // Reflect whatever the pre-paint script already applied.
-  reflectTheme(getActiveTheme());
-
-  // Keep the label/chrome in sync when any source changes the theme.
-  window.addEventListener(THEME_CHANGE_EVENT, (e) => {
-    const theme = (e as CustomEvent<{ theme: ThemeName }>).detail?.theme;
-    if (isTheme(theme)) reflectTheme(theme);
-  });
-
-  document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      // The button flips between the two standard themes; clicking it from an
-      // exotic phosphor theme returns you to the plain light/dark pair.
-      applyTheme(getActiveTheme() === "light" ? "dark" : "light");
-    });
   });
 </script>

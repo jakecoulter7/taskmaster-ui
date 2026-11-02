@@ -140,6 +140,8 @@ export function rowsForSeason(
     list.filter((row) => playerIds.has(row.playerId));
   const marketListingRows = inSeason(rows.marketListingRows);
   const listingIds = new Set(marketListingRows.map((row) => row.id));
+  const bountyRows = inSeason(rows.bountyRows);
+  const bountyIds = new Set(bountyRows.map((row) => row.id));
   return {
     ...rows,
     playerRows,
@@ -174,5 +176,10 @@ export function rowsForSeason(
       listingIds.has(row.listingId),
     ),
     marketSaleRows: inSeason(rows.marketSaleRows),
+    // Bounties are per season too: claims go with their bounty.
+    bountyRows,
+    bountyClaimRows: rows.bountyClaimRows.filter((row) =>
+      bountyIds.has(row.bountyId),
+    ),
   };
 }

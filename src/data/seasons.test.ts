@@ -117,6 +117,9 @@ describe("isSeasonPublic", () => {
 describe("rowsForSeason", () => {
   const empty: CompetitionRows = {
     seasonRows: [],
+    playerIndexRows: [],
+    teamIndexRows: [],
+    taskIndexRows: [],
     playerRows: [],
     teamRows: [],
     memberRows: [],
@@ -150,6 +153,8 @@ describe("rowsForSeason", () => {
     marketListingRows: [],
     marketOfferRows: [],
     marketSaleRows: [],
+    bountyRows: [],
+    bountyClaimRows: [],
   };
   const player = (id: string, seasonId: string) => ({
     id,

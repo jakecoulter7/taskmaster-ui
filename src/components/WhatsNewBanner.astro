@@ -18,10 +18,19 @@ const weekLabel = info
 // the map is exhaustive so the union stays type-safe.
 const config: Record<
   TaskStatus,
-  { tag: string; frame: string; accent: string; cta: string; live?: boolean }
+  {
+    tag: string;
+    /** The tag on phones, where the banner is one line. */
+    short: string;
+    frame: string;
+    accent: string;
+    cta: string;
+    live?: boolean;
+  }
 > = {
   live: {
     tag: "NEW TASK LIVE",
+    short: "LIVE",
     frame: "border-amber/40 bg-amber/10",
     accent: "text-amber",
     cta: "border-amber text-amber hover:bg-amber hover:text-term-bg",
@@ -29,12 +38,14 @@ const config: Record<
   },
   upcoming: {
     tag: "NEXT TASK",
+    short: "NEXT",
     frame: "border-grid bg-term-panel",
     accent: "text-ink-dim",
     cta: "border-grid text-ink-dim hover:border-ink-faint hover:text-ink",
   },
   completed: {
     tag: "LATEST TASK",
+    short: "LATEST",
     frame: "border-acid-dim bg-acid/10",
     accent: "text-acid",
     cta: "border-acid text-acid hover:bg-acid hover:text-term-bg",
@@ -53,13 +64,13 @@ const style = info ? config[info.status] : null;
         role="status"
         aria-live="polite"
         class:list={[
-          "hidden grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border px-4 py-3 text-sm sm:gap-y-0",
+          "hidden items-center gap-3 rounded-lg border px-3 py-2 text-sm sm:px-4 sm:py-3",
           style.frame,
         ]}
       >
         <span
           class:list={[
-            "order-1 flex shrink-0 items-center gap-1.5 text-[10px] font-bold tracking-[0.2em]",
+            "flex shrink-0 items-center gap-1.5 text-[10px] font-bold tracking-[0.2em]",
             style.accent,
           ]}
         >
@@ -71,10 +82,11 @@ const style = info ? config[info.status] : null;
           ) : (
             <span aria-hidden="true">●</span>
           )}
-          {style.tag}
+          <span class="sm:hidden">{style.short}</span>
+          <span class="max-sm:hidden">{style.tag}</span>
         </span>
 
-        <p class="order-3 min-w-0 flex-1 truncate text-ink-dim sm:order-2">
+        <p class="min-w-0 flex-1 truncate text-ink-dim">
           <span class={`font-bold ${style.accent}`}>{weekLabel}</span>
           <span class="mx-1.5 text-ink-faint" aria-hidden="true">
             ·
@@ -89,7 +101,7 @@ const style = info ? config[info.status] : null;
           href={info.href}
           data-whats-new-view
           class:list={[
-            "order-4 inline-flex shrink-0 items-center justify-self-end rounded-md border px-3 py-1.5 text-xs font-bold tracking-widest transition-colors sm:order-3",
+            "inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-xs font-bold tracking-widest transition-colors sm:px-3 sm:py-1.5",
             style.cta,
           ]}
         >
@@ -100,7 +112,7 @@ const style = info ? config[info.status] : null;
           type="button"
           data-whats-new-dismiss
           aria-label="Dismiss new task notice"
-          class="order-2 shrink-0 justify-self-end rounded px-1.5 py-1 text-ink-faint transition-colors hover:text-ink sm:order-4"
+          class="shrink-0 rounded px-1 py-1 text-ink-faint transition-colors hover:text-ink sm:px-1.5"
         >
           <span aria-hidden="true">✕</span>
         </button>
@@ -131,9 +143,8 @@ const style = info ? config[info.status] : null;
       lastSeen = null;
     }
 
-    // Two rows (grid) on phones so the title isn't squeezed out; one row
-    // (flex) from sm up.
-    const shownClasses = ["grid", "sm:flex"];
+    // One row everywhere (phones get the short tag, and the title truncates).
+    const shownClasses = ["flex"];
 
     // Only surface the banner when the current task differs from the one the
     // visitor last acknowledged — i.e. a new week has gone live since.

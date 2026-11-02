@@ -4,10 +4,18 @@ import TerminalWindow from "../../components/TerminalWindow.astro";
 import Pagination from "../../components/Pagination.astro";
 import MarketStatusBadge from "../../components/MarketStatusBadge.astro";
 import MarketSalesFeed from "../../components/MarketSalesFeed.astro";
+import CoinAmount from "../../components/CoinAmount.astro";
 import ConfirmDelete from "../../components/admin/ConfirmDelete.astro";
 import Notice from "../../components/admin/Notice.astro";
-import { tableCell, tableHead } from "../../components/admin/styles";
+import {
+  btnPrimary,
+  inputClass,
+  tableCell,
+  tableHead,
+} from "../../components/admin/styles";
 import { cancelListing } from "../../data/market";
+import { awardBounty, cancelBounty } from "../../data/bounties";
+import { timeLeftLabel } from "../../lib/coin-ui";
 import { selectedSeason } from "../../lib/admin-season";
 import {
   LIST_PAGE_SIZE,
@@ -24,16 +32,34 @@ if (!admin) return Astro.redirect(withBase("/login"));
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
+  const intent = form.get("intent");
+  const by = { adminName: admin.name || admin.email };
+  const params = new URLSearchParams(Astro.url.search);
+  if (intent === "award-bounty" || intent === "cancel-bounty") {
+    const bountyId = Number(form.get("bountyId"));
+    const winnerId = String(form.get("winnerId") ?? "");
+    const ok =
+      Number.isSafeInteger(bountyId) &&
+      (intent === "award-bounty"
+        ? winnerId !== "" && (await awardBounty(bountyId, winnerId, by))
+        : await cancelBounty(bountyId, by));
+    params.set(
+      "done",
+      ok
+        ? intent === "award-bounty"
+          ? "bounty-awarded"
+          : "bounty-cancelled"
+        : "bounty-stale",
+    );
+    return Astro.redirect(withBase(`/admin/market?${params}#bounties`), 303);
+  }
   const listingId = Number(form.get("listingId"));
   const done =
-    form.get("intent") === "cancel-listing" &&
+    intent === "cancel-listing" &&
     Number.isSafeInteger(listingId) &&
-    (await cancelListing(listingId, {
-      adminName: admin.name || admin.email,
-    }))
+    (await cancelListing(listingId, by))
       ? "cancelled"
       : "stale";
-  const params = new URLSearchParams(Astro.url.search);
   params.set("done", done);
   return Astro.redirect(withBase(`/admin/market?${params}#listings`), 303);
 }
@@ -48,6 +74,7 @@ const page = paginate(
   LIST_PAGE_SIZE,
 );
 const sales = queries.getRecentMarketSales(LIST_PAGE_SIZE);
+const bountyBoard = queries.getBountyBoard();
 
 const NOTICES: Record<string, { tone: "success" | "error"; message: string }> =
   {
@@ -60,6 +87,19 @@ const NOTICES: Record<string, { tone: "success" | "error"; message: string }> =
       tone: "error",
       message: "That listing had already closed.",
     },
+    "bounty-awarded": {
+      tone: "success",
+      message: "Bounty awarded. The reward moved from the poster to the winner.",
+    },
+    "bounty-cancelled": {
+      tone: "success",
+      message: "Bounty cancelled. The poster's coins are free again.",
+    },
+    "bounty-stale": {
+      tone: "error",
+      message:
+        "That bounty had already been settled or lapsed (or the winner hadn't claimed it).",
+    },
   };
 const notice = NOTICES[Astro.url.searchParams.get("done") ?? ""];
 const dateFmt = ukDateFormat({
@@ -70,7 +110,7 @@ const dateFmt = ukDateFormat({
 });
 ---
 
-<AdminLayout title="Marketplace">
+<AdminLayout title="Marketplace & bounties">
   <h1 class="text-2xl font-extrabold tracking-tight text-ink">
     <span class="text-acid">$</span> market --moderate
   </h1>
@@ -78,7 +118,9 @@ const dateFmt = ukDateFormat({
     Every player-to-player listing in {season?.name ?? "the season"}, newest
     first. Take down anything that shouldn't be up: the item goes back to the
     seller and pending offers are declined. Sales can't be undone here; use a
-    coin grant on the player's page if one needs putting right.
+    coin grant on the player's page if one needs putting right. Open
+    <a href="#bounties" class="text-cyan hover:underline">bounties</a> are
+    below.
     {
       !queries.marketEnabled && (
         <>
@@ -229,6 +271,144 @@ const dateFmt = ukDateFormat({
       itemLabel="listings"
       class="mt-4"
     />
+  </section>
+
+  <section
+    id="bounties"
+    aria-labelledby="bounties-heading"
+    class="mt-10 scroll-mt-24"
+  >
+    <h2
+      id="bounties-heading"
+      class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      open bounties ({bountyBoard.open.length}, {bountyBoard.settled.length} settled)
+    </h2>
+    <p class="mb-3 max-w-prose text-sm text-ink-dim">
+      Step in when a poster won't pick: award an open bounty to one of its
+      claimants (the reward moves from the poster to them), or cancel it to
+      free the poster's coins. Lapsed bounties have already been refunded.
+      {
+        !queries.bountiesEnabled && (
+          <strong class="text-amber">
+            {" "}
+            The bounties flag is off, so players can't post or claim right now.
+          </strong>
+        )
+      }
+    </p>
+    <TerminalWindow title="~/bounties/open" bodyClass="p-0 sm:p-0">
+      {
+        bountyBoard.open.length === 0 ? (
+          <p class="p-6 text-sm text-ink-faint">no open bounties.</p>
+        ) : (
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr>
+                  <th scope="col" class={tableHead}>
+                    bounty
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    poster
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    reward
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    award to
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    <span class="sr-only">actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {bountyBoard.open.map((view) => (
+                  <tr>
+                    <td class={tableCell}>
+                      <a
+                        href={withBase(`/bounties/${view.bounty.id}`)}
+                        class="font-bold text-ink hover:text-acid"
+                      >
+                        {view.bounty.title}
+                      </a>
+                      <span class="block text-[11px] text-ink-faint">
+                        <time datetime={view.expiresAt}>
+                          {timeLeftLabel(view.expiresAt)}
+                        </time>
+                      </span>
+                    </td>
+                    <td class={tableCell}>
+                      <a
+                        href={withBase(`/admin/players/${view.poster.id}`)}
+                        class="text-cyan hover:underline"
+                      >
+                        {view.poster.name}
+                      </a>
+                    </td>
+                    <td class={tableCell}>
+                      <CoinAmount
+                        amount={view.bounty.reward}
+                        class="text-amber"
+                      />
+                    </td>
+                    <td class={tableCell}>
+                      {view.claims.length === 0 ? (
+                        <span class="text-xs text-ink-faint">no claims</span>
+                      ) : (
+                        <form method="post" class="flex items-center gap-2">
+                          <input
+                            type="hidden"
+                            name="intent"
+                            value="award-bounty"
+                          />
+                          <input
+                            type="hidden"
+                            name="bountyId"
+                            value={view.bounty.id}
+                          />
+                          <label
+                            for={`award-${view.bounty.id}`}
+                            class="sr-only"
+                          >
+                            Winner of {view.bounty.title}
+                          </label>
+                          <select
+                            id={`award-${view.bounty.id}`}
+                            name="winnerId"
+                            class:list={[inputClass(false), "py-1 text-xs"]}
+                          >
+                            {view.claims.map(({ player }) => (
+                              <option value={player.id}>{player.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            type="submit"
+                            class:list={[btnPrimary, "px-2 py-1"]}
+                          >
+                            award
+                          </button>
+                        </form>
+                      )}
+                    </td>
+                    <td class:list={[tableCell, "text-right"]}>
+                      <ConfirmDelete
+                        subject={`${view.poster.name}'s bounty "${view.bounty.title}"`}
+                        impact={[{ label: "claim", count: view.claims.length }]}
+                        intent="cancel-bounty"
+                        fields={{ bountyId: view.bounty.id }}
+                        label="cancel"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </TerminalWindow>
   </section>
 
   <section aria-labelledby="sales-heading" class="mt-10">

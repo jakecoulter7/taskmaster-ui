@@ -1,0 +1,38 @@
+---
+import type { BountyStatus } from "../types";
+
+interface Props {
+  status: BountyStatus;
+  class?: string;
+}
+
+const { status, class: className = "" } = Astro.props;
+
+const config: Record<BountyStatus, { label: string; classes: string }> = {
+  open: { label: "OPEN", classes: "border-acid/40 bg-acid/10 text-acid" },
+  awarded: {
+    label: "AWARDED",
+    classes: "border-amber/40 bg-amber/10 text-amber",
+  },
+  cancelled: {
+    label: "TAKEN DOWN",
+    classes: "border-grid bg-term-panel text-ink-faint",
+  },
+  expired: {
+    label: "LAPSED",
+    classes: "border-grid bg-term-panel text-ink-faint",
+  },
+};
+
+const { label, classes } = config[status];
+---
+
+<span
+  class:list={[
+    "inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-bold tracking-[0.2em]",
+    classes,
+    className,
+  ]}
+>
+  {label}
+</span>

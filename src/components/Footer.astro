@@ -15,7 +15,7 @@ const onAbout = Astro.url.pathname.startsWith(aboutHref);
       <span class="text-acid">$</span>
       <span>echo "EAYL Taskmaster &mdash; The Ultimate Academy Challenge"</span>
     </p>
-    <nav aria-label="Footer">
+    <nav aria-label="Footer" class="flex items-center gap-4">
       <a
         href={aboutHref}
         aria-current={onAbout ? "page" : undefined}
@@ -34,6 +34,18 @@ const onAbout = Astro.url.pathname.startsWith(aboutHref);
         </span>
         about
       </a>
+      <button
+        type="button"
+        data-theme-toggle
+        aria-label="Toggle light / dark theme"
+        class="group inline-flex items-center gap-1 tracking-wide text-ink-dim transition-colors hover:text-ink"
+      >
+        <span class="text-ink-faint group-hover:text-acid" aria-hidden="true"
+          >$</span
+        >
+        theme
+        <span data-theme-state class="text-ink-faint">--dark</span>
+      </button>
     </nav>
     <p class="flex items-center gap-2">
       <span class="h-2 w-2 rounded-full bg-dot-green"></span>
@@ -47,3 +59,44 @@ const onAbout = Astro.url.pathname.startsWith(aboutHref);
     </p>
   </div>
 </footer>
+
+<script>
+  import {
+    applyTheme,
+    getActiveTheme,
+    isTheme,
+    THEME_CHANGE_EVENT,
+    THEME_META_COLOR,
+    type ThemeName,
+  } from "../lib/theme";
+
+  // The footer button is the quick dark/light switch; the exotic CRT
+  // phosphor themes are summoned from the command palette. It reflects
+  // whatever theme is active, including palette-triggered changes, by
+  // listening for the shared theme-change event.
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  const stateLabels = document.querySelectorAll("[data-theme-state]");
+
+  const reflectTheme = (theme: ThemeName) => {
+    themeMeta?.setAttribute("content", THEME_META_COLOR[theme]);
+    stateLabels.forEach((el) => {
+      el.textContent = `--${theme}`;
+    });
+  };
+
+  // Reflect whatever the pre-paint script already applied.
+  reflectTheme(getActiveTheme());
+
+  window.addEventListener(THEME_CHANGE_EVENT, (e) => {
+    const theme = (e as CustomEvent<{ theme: ThemeName }>).detail?.theme;
+    if (isTheme(theme)) reflectTheme(theme);
+  });
+
+  document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      // Flips between the two standard themes; from an exotic phosphor theme
+      // it returns to the plain light/dark pair.
+      applyTheme(getActiveTheme() === "light" ? "dark" : "light");
+    });
+  });
+</script>
