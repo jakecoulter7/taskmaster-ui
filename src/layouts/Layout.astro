@@ -63,10 +63,14 @@ const playerId = viewer?.playerId;
 const playerSeason = playerId ? seasonOfPlayer(playerId) : undefined;
 const playerCoins =
   playerId && playerSeason
-    ? await Astro.locals.getQueries(playerSeason.id).then((q) => ({
-        balance: q.getWallet(playerId).balance,
-        pet: q.getLoadout(playerId).pet,
-      }))
+    ? await Astro.locals.getQueries(playerSeason.id).then((q) => {
+        const loadout = q.getLoadout(playerId);
+        return {
+          balance: q.getWallet(playerId).balance,
+          pet: loadout.pet,
+          petName: loadout.petName ?? loadout.pet?.name,
+        };
+      })
     : undefined;
 // Only players get notifications: their read marker lives on the account.
 const notifications = viewer?.playerId
@@ -155,7 +159,7 @@ const notifications = viewer?.playerId
     {
       playerCoins?.pet?.imageUrl && (
         <WanderingPet
-          name={playerCoins.pet.name}
+          name={playerCoins.petName ?? playerCoins.pet.name}
           imageUrl={playerCoins.pet.imageUrl}
         />
       )

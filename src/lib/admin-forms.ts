@@ -5,11 +5,14 @@ import type { FeatureFlagKey, SubmissionOutcome } from "../types";
 import { FEATURE_FLAG_KEYS } from "../data/feature-flags";
 import { MINI_TASK_MAX_REWARD } from "../data/mini-tasks";
 import {
+  AVATAR_FRAMES,
   COSMETIC_KINDS,
   CRATES,
+  DEAL_DISCOUNT_RANGE,
   NAME_COLOURS,
   POWER_UP_KINDS,
   PROFILE_THEMES,
+  SHELL_PROMPT_MAX,
   SHOP_CATEGORIES,
   WISH_MAX,
 } from "../data/coin-rules";
@@ -1080,6 +1083,19 @@ const shopItemSchema = z
         if (!NAME_COLOURS.some((c) => c === value)) {
           issue("cosmeticValue", `Use one of: ${NAME_COLOURS.join(", ")}.`);
         }
+      } else if (kind === "avatar_frame") {
+        if (!AVATAR_FRAMES.some((f) => f === value)) {
+          issue("cosmeticValue", `Use one of: ${AVATAR_FRAMES.join(", ")}.`);
+        }
+      } else if (kind === "shell_prompt") {
+        if (!value) {
+          issue("cosmeticValue", "Enter the prompt, e.g. {name}@taskmaster:~$");
+        } else if (value.length > SHELL_PROMPT_MAX) {
+          issue(
+            "cosmeticValue",
+            `Keep prompts to ${SHELL_PROMPT_MAX} characters or fewer.`,
+          );
+        }
       } else if (!PROFILE_THEMES.some((t) => t === value)) {
         issue("cosmeticValue", `Use one of: ${PROFILE_THEMES.join(", ")}.`);
       }
@@ -1134,6 +1150,139 @@ export function parseShopItemForm(form: FormData): ParseResult<ShopItemInput> {
       available: available ? "on" : "",
       crateOnly: crateOnly ? "on" : "",
     },
+  );
+}
+
+/** The most items a bundle can hold. */
+export const BUNDLE_MAX_ITEMS = 8;
+
+const bundleSchema = z.object({
+  id: slug,
+  name: requiredText(60),
+  description: z.string().trim().max(300, "Keep it under 300 characters."),
+  price: z
+    .string()
+    .trim()
+    .min(1, "Required.")
+    .transform(Number)
+    .pipe(
+      z
+        .number({ error: "Enter a whole number." })
+        .int("Enter a whole number.")
+        .min(0, "Must be 0 or more.")
+        .max(10000, "Keep it to 10000 or less."),
+    ),
+  available: z.boolean(),
+  sortOrder: optionalOrder,
+  itemIds: z
+    .array(slug)
+    .min(2, "Pick at least two items.")
+    .max(BUNDLE_MAX_ITEMS, `Pick ${BUNDLE_MAX_ITEMS} items or fewer.`),
+});
+
+export type BundleInput = z.output<typeof bundleSchema>;
+
+/**
+ * The bundle form. `catalogue` is the shop: a bundle's items must be in it,
+ * sold directly (no egg exclusives or skill tree rewards), and hold at most
+ * one power-up of each effect (a second could never be used).
+ */
+export function parseBundleForm(
+  form: FormData,
+  catalogue: readonly {
+    id: string;
+    crateOnly: boolean;
+    skillOnly: boolean;
+    powerUp: string | null;
+  }[],
+): ParseResult<BundleInput> {
+  const values = formValues(form);
+  const available = form.get("available") === "on";
+  const itemIds = [
+    ...new Set(form.getAll("itemIds").map((v) => String(v).trim())),
+  ].filter(Boolean);
+  const shown = {
+    ...values,
+    available: available ? "on" : "",
+    itemIds: itemIds.join(","),
+  };
+  const parsed = parseWith(
+    bundleSchema,
+    {
+      id: values.id ?? "",
+      name: values.name ?? "",
+      description: values.description ?? "",
+      price: values.price ?? "",
+      available,
+      sortOrder: values.sortOrder ?? "",
+      itemIds,
+    },
+    shown,
+  );
+  if (!parsed.ok) return parsed;
+  const byId = new Map(catalogue.map((item) => [item.id, item]));
+  const picked = parsed.data.itemIds.map((id) => byId.get(id));
+  if (picked.some((item) => !item || item.crateOnly || item.skillOnly)) {
+    return {
+      ok: false,
+      errors: { itemIds: "Only items sold directly in the shop can go in." },
+      values: shown,
+    };
+  }
+  const effects = picked.flatMap((item) => item?.powerUp ?? []);
+  if (new Set(effects).size !== effects.length) {
+    return {
+      ok: false,
+      errors: { itemIds: "Only one power-up of each kind can go in." },
+      values: shown,
+    };
+  }
+  return parsed;
+}
+
+const dealSchema = z.object({
+  weekStart: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a week.")
+    .refine(
+      (v) => new Date(`${v}T00:00:00Z`).getUTCDay() === 1,
+      "Pick a week (it starts on a Monday).",
+    ),
+  itemId: slug,
+  discountPercent: z
+    .string()
+    .trim()
+    .min(1, "Required.")
+    .transform(Number)
+    .pipe(
+      z
+        .number({ error: "Enter a whole number." })
+        .int("Enter a whole number.")
+        .min(
+          DEAL_DISCOUNT_RANGE.min,
+          `At least ${DEAL_DISCOUNT_RANGE.min}% off.`,
+        )
+        .max(
+          DEAL_DISCOUNT_RANGE.max,
+          `At most ${DEAL_DISCOUNT_RANGE.max}% off.`,
+        ),
+    ),
+});
+
+export type DealInput = z.output<typeof dealSchema>;
+
+/** The deal of the week override form. */
+export function parseDealForm(form: FormData): ParseResult<DealInput> {
+  const values = formValues(form);
+  return parseWith(
+    dealSchema,
+    {
+      weekStart: values.weekStart ?? "",
+      itemId: values.itemId ?? "",
+      discountPercent: values.discountPercent ?? "",
+    },
+    values,
   );
 }
 

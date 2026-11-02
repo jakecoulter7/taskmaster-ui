@@ -20,8 +20,17 @@ import { RARITIES } from "./coin-rules";
 // never leaderboard points, and are applied when the wallet is derived or
 // when a purchase is priced.
 
-/** Prices by tier: a root, two branches and a capstone (36 for a full tree). */
-export const SKILL_TIER_PRICES = { 1: 5, 2: 8, 3: 15 } as const;
+/**
+ * Prices by place in the tree: a root, two branches that each grow a spur
+ * and a tip, and a capstone (72 for a full tree).
+ */
+export const SKILL_PRICES = {
+  root: 5,
+  branch: 8,
+  spur: 8,
+  tip: 10,
+  capstone: 15,
+} as const;
 
 /**
  * A skill-only shop item a node grants. Written to `shop_items` by the
@@ -85,42 +94,63 @@ export const SKILL_REWARD_ITEMS: readonly SkillRewardItem[] = [
     "cartographer",
     "Elephant Cartographer",
   ),
+  // Tip titles, added with the bigger trees (migration 0035).
+  title("skill-title-lost-my-marbles", "Lost My Marbles", "Stormbrewer"),
+  title("skill-title-10x-engineer", "10x Engineer", "Elite Hacker"),
+  title("skill-title-hype-squad", "Hype Squad", "Friendkeeper"),
+  title("skill-title-head-prefect", "Head Prefect", "Overachiever"),
+  title("skill-title-star-elephant", "Star Elephant", "Elephant Cartographer"),
 ];
 
-/** Builds a pathway's four nodes: root → two branches → capstone. */
+type NodeSpec = Omit<SkillNode, "pathId" | "tier" | "price" | "requires">;
+
+/**
+ * Builds a pathway's eight nodes. The root leads to two branches (perks and
+ * a title); each branch grows a spur and then a tip, and the capstone needs
+ * both branches:
+ *
+ *   perkTip       capstone       cosmeticTip
+ *   perkSpur                    cosmeticSpur
+ *         perk               cosmetic
+ *                    root
+ */
 function tree(
   pathId: SkillPathId,
   nodes: {
-    root: Omit<SkillNode, "pathId" | "tier" | "price" | "requires">;
-    perk: Omit<SkillNode, "pathId" | "tier" | "price" | "requires">;
-    cosmetic: Omit<SkillNode, "pathId" | "tier" | "price" | "requires">;
-    capstone: Omit<SkillNode, "pathId" | "tier" | "price" | "requires">;
+    root: NodeSpec;
+    perk: NodeSpec;
+    perkSpur: NodeSpec;
+    perkTip: NodeSpec;
+    cosmetic: NodeSpec;
+    cosmeticSpur: NodeSpec;
+    cosmeticTip: NodeSpec;
+    capstone: NodeSpec;
   },
 ): SkillNode[] {
-  const { root, perk, cosmetic, capstone } = nodes;
+  const { root, perk, perkSpur, perkTip, capstone } = nodes;
+  const { cosmetic, cosmeticSpur, cosmeticTip } = nodes;
+  const node = (
+    spec: NodeSpec,
+    tier: SkillNode["tier"],
+    price: number,
+    requires: NodeSpec[],
+  ): SkillNode => ({
+    ...spec,
+    pathId,
+    tier,
+    price,
+    requires: requires.map((r) => r.id),
+  });
+  const p = SKILL_PRICES;
   return [
-    { ...root, pathId, tier: 1, price: SKILL_TIER_PRICES[1], requires: [] },
-    {
-      ...perk,
-      pathId,
-      tier: 2,
-      price: SKILL_TIER_PRICES[2],
-      requires: [root.id],
-    },
-    {
-      ...cosmetic,
-      pathId,
-      tier: 2,
-      price: SKILL_TIER_PRICES[2],
-      requires: [root.id],
-    },
-    {
-      ...capstone,
-      pathId,
-      tier: 3,
-      price: SKILL_TIER_PRICES[3],
-      requires: [perk.id, cosmetic.id],
-    },
+    node(root, 1, p.root, []),
+    node(perk, 2, p.branch, [root]),
+    node(cosmetic, 2, p.branch, [root]),
+    node(perkSpur, 3, p.spur, [perk]),
+    node(cosmeticSpur, 3, p.spur, [cosmetic]),
+    node(perkTip, 4, p.tip, [perkSpur]),
+    node(capstone, 4, p.capstone, [perk, cosmetic]),
+    node(cosmeticTip, 4, p.tip, [cosmeticSpur]),
   ];
 }
 
@@ -140,9 +170,10 @@ const WEARABLES: ShopCategory[] = ["pet", "avatar", "cosmetic"];
  * The pathways. They're balanced on one scale: over a season a committed
  * player has roughly 10 of each weekly event (entries, scored weeks, winner
  * calls, People's Choice votes), 5 poll votes, 4 power-ups used and about 5
- * purchases of each kind they discount. On that scale each tier is worth
- * about the same on every pathway (root ~14, branches ~16 and ~10 plus a
- * title, capstone ~24 plus a name colour: ~64 coins for a 36-coin tree).
+ * purchases of each kind they discount. On that scale each node is worth
+ * about the same on every pathway (root ~14, perk branch ~16, title branch
+ * ~10 plus a title, spurs ~11 to 12, perk tip ~13 to 15, title tip ~12 plus
+ * a title, capstone ~24 plus a name colour: ~113 coins for a 72-coin tree).
  * `skill-trees.test.ts` checks it.
  */
 export const SKILL_PATHS: readonly SkillPath[] = [
@@ -170,12 +201,40 @@ export const SKILL_PATHS: readonly SkillPath[] = [
           powerUpsOff(2, ["golden_week", "sabotage"]),
         ],
       },
+      perkSpur: {
+        id: "storm-ball-lightning",
+        name: "Ball Lightning",
+        description: "Nobody knows where it'll land, least of all you.",
+        perks: [
+          earn("power-up-use", 2),
+          powerUpsOff(2, ["double_down", "sabotage"]),
+        ],
+      },
+      perkTip: {
+        id: "storm-supercell",
+        name: "Supercell",
+        description: "The storm that feeds itself.",
+        perks: [powerUpsOff(1), earn("power-up-use", 2)],
+      },
       cosmetic: {
         id: "storm-thunderhead",
         name: "Thunderhead",
         description: "You always see the weather coming.",
         perks: [earn("prediction")],
         rewardItemId: "skill-title-stormbrewer",
+      },
+      cosmeticSpur: {
+        id: "storm-barometer",
+        name: "Barometer",
+        description: "You can feel the pressure dropping.",
+        perks: [earn("prediction"), powerUpsOff(1, ["shield", "mirror"])],
+      },
+      cosmeticTip: {
+        id: "storm-losing-your-marbles",
+        name: "Losing Your Marbles",
+        description: "Rattled? Never. Rattling everyone else? Always.",
+        perks: [earn("placement"), powerUpsOff(1, ["sabotage", "mirror"])],
+        rewardItemId: "skill-title-lost-my-marbles",
       },
       capstone: {
         id: "storm-eye-of-the-hurricane",
@@ -211,12 +270,40 @@ export const SKILL_PATHS: readonly SkillPath[] = [
           powerUpsOff(2, ["hint"]),
         ],
       },
+      perkSpur: {
+        id: "hacker-keylogger",
+        name: "Keylogger",
+        description: "Every keystroke, every week.",
+        perks: [
+          earn("prediction"),
+          powerUpsOff(1, ["double_down", "sabotage"]),
+        ],
+      },
+      perkTip: {
+        id: "hacker-botnet",
+        name: "Botnet",
+        description: "Why call one winner when a thousand machines can?",
+        perks: [earn("prediction"), powerUpsOff(2, ["golden_week", "mirror"])],
+      },
       cosmetic: {
         id: "hacker-root-access",
         name: "Root Access",
         description: 'git commit -m "every single week"',
         perks: [earn("entry")],
         rewardItemId: "skill-title-elite-hacker",
+      },
+      cosmeticSpur: {
+        id: "hacker-rubber-duck",
+        name: "Rubber Duck",
+        description: "Explain the task out loud and the answer appears.",
+        perks: [earn("entry"), powerUpsOff(2, ["shield"])],
+      },
+      cosmeticTip: {
+        id: "hacker-friday-deploy",
+        name: "Friday Deploy",
+        description: "Shipping straight to production, fearlessly.",
+        perks: [earn("placement"), powerUpsOff(2, ["wish"])],
+        rewardItemId: "skill-title-10x-engineer",
       },
       capstone: {
         id: "hacker-zero-day",
@@ -237,7 +324,7 @@ export const SKILL_PATHS: readonly SkillPath[] = [
     inspiredBy: "Team Friendship",
     motto: "friendship is magic",
     description:
-      "Community. Coins for every vote you cast, three times the weekly gift limit, and a name full of warmth.",
+      "Community. Coins for every vote you cast, four times the weekly gift limit, and a name full of warmth.",
     accent: "magenta",
     nodes: tree("friendkeeper", {
       root: {
@@ -260,12 +347,44 @@ export const SKILL_PATHS: readonly SkillPath[] = [
           { kind: "gift_cap", amount: 2 },
         ],
       },
+      perkSpur: {
+        id: "friend-voice-note",
+        name: "Voice Note",
+        description: "Seven minutes long, and worth every second.",
+        perks: [
+          earn("peoples-choice-vote"),
+          powerUpsOff(1, ["shield", "insurance"]),
+        ],
+      },
+      perkTip: {
+        id: "friend-secret-santa",
+        name: "Secret Santa",
+        description: "Giving is its own reward. And also a reward.",
+        perks: [
+          earn("poll-vote", 2),
+          earn("power-up-use"),
+          { kind: "gift_cap", amount: 5 },
+        ],
+      },
       cosmetic: {
         id: "friend-bff",
         name: "BFF",
         description: "Backing your friends to win.",
         perks: [earn("prediction")],
         rewardItemId: "skill-title-friendkeeper",
+      },
+      cosmeticSpur: {
+        id: "friend-inside-joke",
+        name: "Inside Joke",
+        description: "Nobody else gets it. That's the point.",
+        perks: [earn("entry"), powerUpsOff(1, ["shield", "mirror"])],
+      },
+      cosmeticTip: {
+        id: "friend-hype-squad",
+        name: "Hype Squad",
+        description: "The loudest cheers in the room, every week.",
+        perks: [earn("peoples-choice-vote"), powerUpsOff(2, ["insurance"])],
+        rewardItemId: "skill-title-hype-squad",
       },
       capstone: {
         id: "friend-friendship-is-magic",
@@ -305,12 +424,46 @@ export const SKILL_PATHS: readonly SkillPath[] = [
           powerUpsOff(3, ["insurance", "golden_week"]),
         ],
       },
+      perkSpur: {
+        id: "achiever-bonus-question",
+        name: "Bonus Question",
+        description: "Answered before anyone thought to ask it.",
+        perks: [
+          earn("placement"),
+          powerUpsOff(1, ["golden_week", "insurance"]),
+        ],
+      },
+      perkTip: {
+        id: "achiever-deans-list",
+        name: "Dean's List",
+        description: "Consistency, framed and hung on the wall.",
+        perks: [
+          earn("entry"),
+          powerUpsOff(1, ["golden_week", "insurance", "shield"]),
+        ],
+      },
       cosmetic: {
         id: "achiever-teachers-pet",
         name: "Teacher's Pet",
         description: "First to vote, every time.",
         perks: [earn("peoples-choice-vote")],
         rewardItemId: "skill-title-overachiever",
+      },
+      cosmeticSpur: {
+        id: "achiever-hall-monitor",
+        name: "Hall Monitor",
+        description: "Clipboard in hand, votes in on time.",
+        perks: [
+          earn("peoples-choice-vote"),
+          powerUpsOff(1, ["insurance", "shield"]),
+        ],
+      },
+      cosmeticTip: {
+        id: "achiever-head-prefect",
+        name: "Head Prefect",
+        description: "The badge, the clipboard and the final say.",
+        perks: [earn("prediction"), powerUpsOff(2, ["golden_week"])],
+        rewardItemId: "skill-title-head-prefect",
       },
       capstone: {
         id: "achiever-valedictorian",
@@ -350,12 +503,44 @@ export const SKILL_PATHS: readonly SkillPath[] = [
           { kind: "egg_discount", amount: 1 },
         ],
       },
+      perkSpur: {
+        id: "cartographer-compass-rose",
+        name: "Compass Rose",
+        description: "Every direction leads to a bargain.",
+        perks: [
+          earn("poll-vote"),
+          { kind: "shop_discount", amount: 1, categories: WEARABLES },
+          { kind: "egg_luck", amount: 0.05 },
+        ],
+      },
+      perkTip: {
+        id: "cartographer-uncharted-waters",
+        name: "Uncharted Waters",
+        description: "Off the edge of the known shop.",
+        perks: [earn("entry"), { kind: "egg_luck", amount: 0.15 }],
+      },
       cosmetic: {
         id: "cartographer-never-forgets",
         name: "Never Forgets",
         description: "An elephant remembers who's in form.",
         perks: [earn("prediction")],
         rewardItemId: "skill-title-cartographer",
+      },
+      cosmeticSpur: {
+        id: "cartographer-trunk-call",
+        name: "Trunk Call",
+        description: "Long distance, but always picks up.",
+        perks: [
+          earn("peoples-choice-vote"),
+          powerUpsOff(1, ["wish", "insurance"]),
+        ],
+      },
+      cosmeticTip: {
+        id: "cartographer-star-chart",
+        name: "Star Chart",
+        description: "Plotting a course by the Star Elephant.",
+        perks: [earn("placement"), powerUpsOff(2, ["wish"])],
+        rewardItemId: "skill-title-star-elephant",
       },
       capstone: {
         id: "cartographer-here-be-dragons",
@@ -390,7 +575,7 @@ export const isSkillPathId = (id: string): id is SkillPathId =>
 
 /** A pathway's nodes grouped by tier, root first. */
 export const nodesByTier = (path: SkillPath): SkillNode[][] =>
-  ([1, 2, 3] as const)
+  ([1, 2, 3, 4] as const)
     .map((tier) => path.nodes.filter((node) => node.tier === tier))
     .filter((nodes) => nodes.length > 0);
 

@@ -155,6 +155,13 @@ describe("rowsForSeason", () => {
     marketSaleRows: [],
     bountyRows: [],
     bountyClaimRows: [],
+    raffleTicketRows: [],
+    renameTokenRows: [],
+    wrappedGiftRows: [],
+    bundlePurchaseRows: [],
+    shopBundleRows: [],
+    shopBundleItemRows: [],
+    shopDealRows: [],
   };
   const player = (id: string, seasonId: string) => ({
     id,
@@ -178,6 +185,7 @@ describe("rowsForSeason", () => {
     playerId,
     itemId: "duck",
     price: 5,
+    bundlePurchaseId: null,
     createdAt: "2026-01-01 00:00:00+00",
   });
   const use = (id: number, taskId: string, playerId: string) => ({
@@ -186,6 +194,7 @@ describe("rowsForSeason", () => {
     playerId,
     taskId,
     effect: "hint" as const,
+    copiedEffect: null,
     targetPlayerId: null,
     createdAt: "2026-01-01 00:00:00+00",
   });

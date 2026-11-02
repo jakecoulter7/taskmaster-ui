@@ -6,6 +6,7 @@ import { getCrate } from "../../../data/coin-rules";
 import { rollCrate } from "../../../data/coins";
 import { openCrate } from "../../../data/shop";
 import { withBase } from "../../../lib/url";
+import { shopHref } from "../../../lib/coin-ui";
 
 // Cracking an egg (a crate) from `/shop`. Living under `/account` means the middleware
 // has already required a signed-in player and purges the cached rows after.
@@ -23,10 +24,8 @@ const BLOCK_OUTCOME: Record<CrateBlock, CoinOutcome> = {
 const MAX_ATTEMPTS = 3;
 
 // A cracked egg lands on its reveal; anything else back on the eggs.
-const backToShop = (params?: Record<string, string>, hash = "crates") => {
-  const search = params ? `?${new URLSearchParams(params)}` : "";
-  return withBase(`/shop${search}#${hash}`);
-};
+const backToShop = (params?: Record<string, string>, hash = "crates") =>
+  shopHref("eggs", params, hash);
 
 const secureRandom = () =>
   crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32;

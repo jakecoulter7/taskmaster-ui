@@ -7,6 +7,7 @@ import Notice from "./Notice.astro";
 import SlugFromName from "./SlugFromName.astro";
 import { btnGhost, btnPrimary, inputClass, labelClass } from "./styles";
 import {
+  AVATAR_FRAMES,
   CATEGORY_INFO,
   COSMETIC_KIND_LABELS,
   COSMETIC_KINDS,
@@ -16,7 +17,7 @@ import {
   PROFILE_THEMES,
   SHOP_CATEGORIES,
 } from "../../data/coins";
-import { CRATES } from "../../data/coin-rules";
+import { CRATES, SHELL_PROMPT_MAX } from "../../data/coin-rules";
 import type { FieldErrors, FormValues } from "../../lib/admin-forms";
 import { withBase } from "../../lib/url";
 
@@ -237,7 +238,7 @@ const select = (name: string) => ({
         name="cosmeticValue"
         value={values.cosmeticValue}
         error={errors.cosmeticValue}
-        hint={`Title: the text shown under the name. Name colour: ${NAME_COLOURS.join(" / ")}. Profile theme: ${PROFILE_THEMES.join(" / ")}.`}
+        hint={`Title: the text shown under the name. Name colour: ${NAME_COLOURS.join(" / ")}. Profile theme: ${PROFILE_THEMES.join(" / ")}. Avatar frame: ${AVATAR_FRAMES.join(" / ")}. Shell prompt: up to ${SHELL_PROMPT_MAX} characters, {name} becomes the player's handle (e.g. {name}@taskmaster:~$).`}
       />
     </div>
   </fieldset>

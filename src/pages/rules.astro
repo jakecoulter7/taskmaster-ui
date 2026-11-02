@@ -10,11 +10,16 @@ import {
   BOUNTY_DAYS,
   BOUNTY_OPEN_LIMIT,
   BOUNTY_REWARD_RANGE,
+  DEAL_DISCOUNT_PERCENT,
+  GIFT_WRAP_FEE,
+  RAFFLE_MAX_TICKETS,
+  RAFFLE_TICKET_PRICE,
   RARITIES,
+  RENAME_TOKEN_PRICE,
   cratesOnSale,
 } from "../data/coin-rules";
 import { RARITY_INFO, formatChance } from "../lib/coin-ui";
-import { SKILL_PATHS, SKILL_TIER_PRICES, pathCost } from "../data/skill-trees";
+import { SKILL_PATHS, SKILL_PRICES, pathCost } from "../data/skill-trees";
 import { SKILL_ACCENT_CLASS } from "../lib/skill-ui";
 import { withBase } from "../lib/url";
 
@@ -604,8 +609,9 @@ const bonusRows: BonusRow[] = [
           </RuleItem>
           <RuleItem>
             Spend coins in the <a href={withBase("/shop")} class={link}>shop</a> on
-            pets (one can follow you around the site), avatars, titles, name colours
-            and profile themes. Everyone can see what you wear; your balance and inventory
+            pets (one can follow you around the site), avatars, avatar frames, titles,
+            name colours, shell prompts (shown on your profile and your entries) and
+            profile themes. Everyone can see what you wear; your balance and inventory
             stay private in the wallet on your <a
               href={withBase("/account#wallet")}
               class={link}>profile</a
@@ -625,8 +631,8 @@ const bonusRows: BonusRow[] = [
               <RuleItem accent="cyan">
                 <span class="font-bold text-ink">The marketplace</span>: sell
                 pets, avatars, cosmetics, egg exclusives and unused power-ups
-                (including the Taskmaster's Hint, but not Shield, Mirror or
-                Insurance) to other players on the{" "}
+                (including the Taskmaster's Hint, but not passive ones like
+                Shield, Mirror or Insurance) to other players on the{" "}
                 <a href={withBase("/market")} class={link}>
                   market
                 </a>
@@ -727,7 +733,34 @@ const bonusRows: BonusRow[] = [
                 <span class="text-danger">☠ Sabotage</span>: take {
                   rules.coins.sabotagePoints
                 } points from any other player that week (squad-mates included). Each
-                player can only be sabotaged once a week.
+                player can only be sabotaged (or robbed) once a week.
+              </span>
+              <span class="block">
+                <span class="text-amber">$→ Heist</span>: steal {
+                  rules.coins.heistPoints
+                } points from another player that week: they lose them and you gain
+                them. It shares Sabotage's limit, and Shields and Mirrors work on it
+                the same way (a bounced Heist takes the points from you instead).
+              </span>
+              <span class="block">
+                <span class="text-cyan">❄ Freeze</span>: pick a player who hasn't
+                used a power-up yet that week; they can't use one for the rest of
+                it. Shields and Mirrors don't stop it.
+              </span>
+              <span class="block">
+                <span class="text-acid">◎ Spyglass</span>: privately see whether
+                another player holds an unspent Shield or Mirror right now.
+                Everyone sees who you looked at, but only you see the answer.
+              </span>
+              <span class="block">
+                <span class="text-amber">¢×2 Coin Rush</span>: every coin that week
+                pays you (placement, entry, winner call and People's Choice vote)
+                is multiplied by {rules.coins.coinRushMultiplier}.
+              </span>
+              <span class="block">
+                <span class="text-magenta">⧉ Copycat</span>: copy a power-up
+                someone else used the week before, and get its effect this week
+                (pick your own target if it needs one). It can't copy Copycat.
               </span>
             </span>
           </RuleItem>
@@ -751,10 +784,21 @@ const bonusRows: BonusRow[] = [
                   rules.coins.placement.scored
                 }.
               </span>
+              <span class="block">
+                <span class="text-gold">✪ Bounty Badge</span>: the next bounty
+                you win after buying it pays {rules.coins.bountyBadgePercent}% extra
+                (rounded up), on the house.
+              </span>
+              <span class="block">
+                <span class="text-acid">↑ Underdog</span>: finish in the bottom
+                half two published weeks in a row (from the next deadline after you
+                buy it) and you get +{rules.coins.underdogPoints} points on the week
+                after.
+              </span>
             </span>
-            Shields and Mirrors are secret: a Sabotage on you counts as normal until
-            that week's results are out, then the twist is revealed. A bounced Sabotage
-            can't be blocked or bounced again.
+            Shields and Mirrors are secret: a Sabotage or Heist on you counts as
+            normal until that week's results are out, then the twist is revealed. A
+            bounced one can't be blocked or bounced again.
           </RuleItem>
           <RuleItem accent="magenta">
             <span class="font-bold text-ink">
@@ -764,6 +808,19 @@ const bonusRows: BonusRow[] = [
             reason: they grant it or decline it entirely at their discretion,
             and either way the wish is spent. Only you and the Taskmaster see
             it.
+          </RuleItem>
+          <RuleItem accent="amber">
+            <span class="font-bold text-ink">Shop extras</span>:{" "}
+            {features.shop_deals &&
+              `one item each week is the deal of the week, ${DEAL_DISCOUNT_PERCENT}% off (or whatever the Taskmaster picks), Monday to Monday. `}
+            {features.shop_bundles &&
+              "Bundles sell several items for one price, if you haven't had any of them. "}
+            Rename tokens ({RENAME_TOKEN_PRICE} coins, buy as many as you like)
+            give one of your pets a custom name.
+            {features.shop_gift_wrap &&
+              ` Gift wrap buys a pet, avatar or cosmetic for someone else in your season who doesn't have it, for its price plus ${GIFT_WRAP_FEE} coins, with an optional note and anonymous sender.`}
+            {features.shop_raffle &&
+              ` The weekly raffle sells up to ${RAFFLE_MAX_TICKETS} tickets each (${RAFFLE_TICKET_PRICE} coins a ticket) on the live week; when its deadline passes, one ticket wins the whole pot.`}
           </RuleItem>
           <RuleItem>
             If a result is corrected after you've spent, your balance can dip
@@ -793,9 +850,11 @@ const bonusRows: BonusRow[] = [
                 next season.
               </RuleItem>
               <RuleItem>
-                Each tree has a root ({SKILL_TIER_PRICES[1]} coins), two
-                branches ({SKILL_TIER_PRICES[2]} each, root first) and a
-                capstone ({SKILL_TIER_PRICES[3]}, both branches first):{" "}
+                Each tree has a root ({SKILL_PRICES.root} coins) and two
+                branches ({SKILL_PRICES.branch} each, root first). Each branch
+                grows a spur ({SKILL_PRICES.spur}), then a tip
+                ({SKILL_PRICES.tip}), and the capstone
+                ({SKILL_PRICES.capstone}) needs both branches:{" "}
                 {pathCost(SKILL_PATHS[0])} coins for the lot.
               </RuleItem>
               <RuleItem accent="cyan">

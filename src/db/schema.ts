@@ -62,6 +62,8 @@ export const cosmeticKind = pgEnum("cosmetic_kind", [
   "title",
   "name_colour",
   "theme",
+  "shell_prompt",
+  "avatar_frame",
 ]);
 export const powerUpKind = pgEnum("power_up_kind", [
   "double_down",
@@ -75,6 +77,15 @@ export const powerUpKind = pgEnum("power_up_kind", [
   "insurance",
   // Spent by making a wish (a `wishes` row), never on a week.
   "wish",
+  // Active, like the first four.
+  "heist",
+  "freeze",
+  "spyglass",
+  "coin_rush",
+  "copycat",
+  // Passive, like Shield, Mirror and Insurance.
+  "bounty_badge",
+  "underdog",
 ]);
 export const wishStatus = pgEnum("wish_status", [
   "pending",
@@ -107,6 +118,8 @@ export const loadoutSlot = pgEnum("loadout_slot", [
   "title",
   "name_colour",
   "theme",
+  "shell_prompt",
+  "avatar_frame",
 ]);
 
 // When a score or bonus was first recorded and last changed. Real instants
@@ -773,6 +786,10 @@ export const coinPurchases = pgTable(
       .notNull()
       .references(() => shopItems.id, { onDelete: "restrict" }),
     price: integer().notNull(),
+    // Set on the copies a bundle gave (their price is in the bundle's row).
+    bundlePurchaseId: integer().references(() => bundlePurchases.id, {
+      onDelete: "cascade",
+    }),
     createdAt: timestamp({ withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),
@@ -781,6 +798,7 @@ export const coinPurchases = pgTable(
     check("coin_purchases_price_positive", sql`${t.price} >= 0`),
     index("coin_purchases_player_id_idx").on(t.playerId),
     index("coin_purchases_item_id_idx").on(t.itemId),
+    index("coin_purchases_bundle_purchase_id_idx").on(t.bundlePurchaseId),
   ],
 );
 
@@ -789,7 +807,11 @@ export const coinPurchases = pgTable(
  * season, at most one per player per week, and a player can be sabotaged at
  * most once per week. The effect is copied
  * from the item so it can't change after use. Effects (Golden Week, Double
- * Down, Sabotage) are applied when the snapshot is derived.
+ * Down, Sabotage, Heist, Coin Rush…) are applied when the snapshot is
+ * derived. A Copycat names the effect it copied (`copiedEffect`), and acts
+ * as that effect. Heist shares Sabotage's one-hit-per-target-per-week
+ * limit, and Freeze stops its target using one that week; both are checked
+ * by the write under a per-week lock (`src/data/shop.ts`).
  */
 export const powerUpUses = pgTable(
   "power_up_uses",
@@ -806,6 +828,7 @@ export const powerUpUses = pgTable(
       .notNull()
       .references(() => tasks.id, { onDelete: "cascade" }),
     effect: powerUpKind().notNull(),
+    copiedEffect: powerUpKind(),
     targetPlayerId: text().references(() => players.id, {
       onDelete: "cascade",
     }),
@@ -819,20 +842,29 @@ export const powerUpUses = pgTable(
     uniqueIndex("power_up_uses_one_sabotage_per_target_idx")
       .on(t.taskId, t.targetPlayerId)
       .where(sql`${t.effect} = 'sabotage'`),
+    // Compared as text so the checks don't use enum values added in the
+    // same migration.
     check(
-      "power_up_uses_target_when_sabotage",
-      sql`(${t.effect} = 'sabotage') = (${t.targetPlayerId} is not null)`,
+      "power_up_uses_target_when_targeted",
+      sql`(coalesce(${t.copiedEffect}, ${t.effect})::text in ('sabotage', 'heist', 'freeze', 'spyglass')) = (${t.targetPlayerId} is not null)`,
     ),
     check(
       "power_up_uses_not_self",
       sql`${t.targetPlayerId} is distinct from ${t.playerId}`,
     ),
-    // Shield, Mirror and Insurance are passive, and a wish is spent on a
-    // `wishes` row. Compared as text so the check doesn't use the enum
-    // values added in the same migration.
+    // Shield, Mirror, Insurance, Bounty Badge and Underdog are passive, and
+    // a wish is spent on a `wishes` row.
     check(
       "power_up_uses_active_effect",
-      sql`${t.effect}::text not in ('shield', 'mirror', 'insurance', 'wish')`,
+      sql`${t.effect}::text not in ('shield', 'mirror', 'insurance', 'wish', 'bounty_badge', 'underdog')`,
+    ),
+    check(
+      "power_up_uses_copied_when_copycat",
+      sql`(${t.effect}::text = 'copycat') = (${t.copiedEffect} is not null)`,
+    ),
+    check(
+      "power_up_uses_copied_active",
+      sql`${t.copiedEffect} is null or ${t.copiedEffect}::text not in ('copycat', 'shield', 'mirror', 'insurance', 'wish', 'bounty_badge', 'underdog')`,
     ),
     index("power_up_uses_task_id_idx").on(t.taskId),
     index("power_up_uses_target_player_id_idx").on(t.targetPlayerId),
@@ -1415,5 +1447,217 @@ export const miniTaskCompletions = pgTable(
       foreignColumns: [players.id, players.seasonId],
     }).onDelete("cascade"),
     index("mini_task_completions_player_id_idx").on(t.playerId),
+  ],
+);
+
+// ── Shop extras ───────────────────────────────────────────────────────
+
+/**
+ * One weekly raffle ticket, bought for a live week (each row is a ticket).
+ * The pot is every ticket's price; the winner is drawn from the tickets'
+ * secret `nonce`s once the week's deadline passes (derived, see
+ * `src/data/raffle.ts`), so nobody can know the outcome before it closes.
+ * The price, cap and week are checked by the write.
+ */
+export const raffleTickets = pgTable(
+  "raffle_tickets",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    taskId: text()
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    playerId: text()
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    price: integer().notNull(),
+    // Server-side randomness for the draw; never shown to anyone.
+    nonce: text().notNull().default(sql`gen_random_uuid()::text`),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check("raffle_tickets_price_positive", sql`${t.price} >= 0`),
+    index("raffle_tickets_task_id_idx").on(t.taskId),
+    index("raffle_tickets_player_id_idx").on(t.playerId),
+  ],
+);
+
+/**
+ * A rename token: bought (any number, at the price paid), then spent to
+ * give one of the player's pets a custom name. The newest spent token for a
+ * pet is its name. Unspent tokens have no pet, name or `usedAt`.
+ */
+export const renameTokens = pgTable(
+  "rename_tokens",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    playerId: text()
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    price: integer().notNull(),
+    itemId: text().references(() => shopItems.id, { onDelete: "cascade" }),
+    name: text(),
+    usedAt: timestamp({ withTimezone: true, mode: "string" }),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check("rename_tokens_price_positive", sql`${t.price} >= 0`),
+    check(
+      "rename_tokens_spent_fields",
+      sql`(${t.usedAt} is null) = (${t.itemId} is null)
+        and (${t.usedAt} is null) = (${t.name} is null)`,
+    ),
+    check(
+      "rename_tokens_name_length",
+      sql`${t.name} is null or char_length(${t.name}) between 1 and 24`,
+    ),
+    index("rename_tokens_player_id_idx").on(t.playerId),
+  ],
+);
+
+/**
+ * A shop item one player bought for another (gift wrap). The recipient owns
+ * it through `purchaseId`, a zero-price `coin_purchases` row written in the
+ * same statement (like `item_gifts`); the sender paid `price` plus the wrap
+ * `fee`. Both players are in the same season. An anonymous gift hides the
+ * sender from the recipient.
+ */
+export const wrappedGifts = pgTable(
+  "wrapped_gifts",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    seasonId: seasonId(),
+    fromPlayerId: text().notNull(),
+    toPlayerId: text().notNull(),
+    itemId: text()
+      .notNull()
+      .references(() => shopItems.id, { onDelete: "restrict" }),
+    purchaseId: integer()
+      .notNull()
+      .unique("wrapped_gifts_purchase_id_unique")
+      .references(() => coinPurchases.id, { onDelete: "cascade" }),
+    price: integer().notNull(),
+    fee: integer().notNull(),
+    anonymous: boolean().notNull().default(false),
+    message: text(),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: "wrapped_gifts_from_player_season_fk",
+      columns: [t.fromPlayerId, t.seasonId],
+      foreignColumns: [players.id, players.seasonId],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "wrapped_gifts_to_player_season_fk",
+      columns: [t.toPlayerId, t.seasonId],
+      foreignColumns: [players.id, players.seasonId],
+    }).onDelete("cascade"),
+    check("wrapped_gifts_not_self", sql`${t.fromPlayerId} <> ${t.toPlayerId}`),
+    check(
+      "wrapped_gifts_price_positive",
+      sql`${t.price} >= 0 and ${t.fee} >= 0`,
+    ),
+    check(
+      "wrapped_gifts_message_length",
+      sql`${t.message} is null or char_length(${t.message}) <= 80`,
+    ),
+    index("wrapped_gifts_from_player_id_idx").on(t.fromPlayerId),
+    index("wrapped_gifts_to_player_id_idx").on(t.toPlayerId),
+  ],
+);
+
+/**
+ * A bundle of shop items sold together for one price (site-wide, managed in
+ * `/admin/shop`). Its items are in `shop_bundle_items`.
+ */
+export const shopBundles = pgTable(
+  "shop_bundles",
+  {
+    id: text().primaryKey(),
+    name: text().notNull(),
+    description: text().notNull().default(""),
+    price: integer().notNull(),
+    // Retired bundles can't be bought; copies already sold stay put.
+    available: boolean().notNull().default(true),
+    sortOrder: integer().notNull().default(0),
+    ...recordedTimestamps(),
+  },
+  (t) => [
+    check("shop_bundles_price_range", sql`${t.price} between 0 and 10000`),
+  ],
+);
+
+export const shopBundleItems = pgTable(
+  "shop_bundle_items",
+  {
+    bundleId: text()
+      .notNull()
+      .references(() => shopBundles.id, { onDelete: "cascade" }),
+    itemId: text()
+      .notNull()
+      .references(() => shopItems.id, { onDelete: "restrict" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.bundleId, t.itemId] }),
+    index("shop_bundle_items_item_id_idx").on(t.itemId),
+  ],
+);
+
+/**
+ * A bundle a player bought, at the price paid then. Each item it gave is a
+ * zero-price `coin_purchases` row pointing back here.
+ */
+export const bundlePurchases = pgTable(
+  "bundle_purchases",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    playerId: text()
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    bundleId: text()
+      .notNull()
+      .references(() => shopBundles.id, { onDelete: "restrict" }),
+    price: integer().notNull(),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    check("bundle_purchases_price_positive", sql`${t.price} >= 0`),
+    index("bundle_purchases_player_id_idx").on(t.playerId),
+  ],
+);
+
+/**
+ * An admin's pick for one week's deal (site-wide), overriding the automatic
+ * rotation. `weekStart` is the week's Monday (UK date).
+ */
+export const shopDeals = pgTable(
+  "shop_deals",
+  {
+    weekStart: date({ mode: "string" }).primaryKey(),
+    itemId: text()
+      .notNull()
+      .references(() => shopItems.id, { onDelete: "cascade" }),
+    discountPercent: integer().notNull(),
+    actorId: text().notNull(),
+    actorName: text().notNull(),
+    ...recordedTimestamps(),
+  },
+  (t) => [
+    check(
+      "shop_deals_discount_range",
+      sql`${t.discountPercent} between 5 and 90`,
+    ),
+    check(
+      "shop_deals_week_starts_monday",
+      sql`extract(isodow from ${t.weekStart}) = 1`,
+    ),
   ],
 );

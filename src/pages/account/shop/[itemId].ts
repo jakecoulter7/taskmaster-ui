@@ -1,9 +1,10 @@
 import type { APIRoute } from "astro";
-import type { CoinOutcome, PurchaseBlock } from "../../../types";
+import type { CoinOutcome, PurchaseBlock, ShopTab } from "../../../types";
 import { loadFreshPlayerCompetition } from "../../../data/competition";
 import { createQueries } from "../../../data/queries";
 import { buyItem } from "../../../data/shop";
 import { withBase } from "../../../lib/url";
+import { parseShopTab, shopHref, shopTabOf } from "../../../lib/coin-ui";
 
 // Buying from `/shop`. Living under `/account` means the middleware has
 // already required a signed-in player (with a changed temporary password)
@@ -23,30 +24,41 @@ const BLOCK_OUTCOME: Record<PurchaseBlock, CoinOutcome> = {
   "season-closed": "season-closed",
 };
 
-const backToShop = (itemId: string, outcome?: CoinOutcome) => {
-  const search = outcome ? `?${new URLSearchParams({ coins: outcome })}` : "";
-  return withBase(`/shop${search}#item-${encodeURIComponent(itemId)}`);
-};
+// Back to the tab the item was bought from (the featured tab's deal posts
+// `tab=featured`), else the tab it's shelved on.
+const backToShop = (
+  itemId: string,
+  tab: ShopTab | undefined,
+  outcome?: CoinOutcome,
+) =>
+  shopHref(
+    tab,
+    outcome ? { coins: outcome } : {},
+    `${tab === "featured" ? "deal" : "item"}-${encodeURIComponent(itemId)}`,
+  );
 
 // Signing in from the shop lands here (see `/login?next=`).
 export const GET: APIRoute = ({ params, redirect }) =>
-  redirect(backToShop(params.itemId ?? ""));
+  redirect(backToShop(params.itemId ?? "", undefined));
 
-export const POST: APIRoute = async ({ params, locals, redirect }) => {
+export const POST: APIRoute = async ({ params, locals, redirect, request }) => {
   const player = locals.player;
   if (!player || player.mustChangePassword) {
     return redirect(withBase("/login"));
   }
   const itemId = params.itemId ?? "";
-  const reply = (outcome: CoinOutcome) =>
-    redirect(backToShop(itemId, outcome), 303);
+  const form = await request.formData().catch(() => undefined);
+  const from = parseShopTab(form?.get("tab")?.toString());
 
   const data = await loadFreshPlayerCompetition(player.playerId);
-  if (!data) return reply("invalid");
-  const { getShopItemById, getPurchaseBlock, getWallet, getItemPrice } =
-    createQueries(data);
-  const item = getShopItemById(itemId);
+  const queries = data && createQueries(data);
+  const item = queries?.getShopItemById(itemId);
+  const tab = from ?? (item ? shopTabOf(item) : undefined);
+  const reply = (outcome: CoinOutcome) =>
+    redirect(backToShop(itemId, tab, outcome), 303);
+  if (!queries) return reply("invalid");
   if (!item) return reply("unavailable");
+  const { getPurchaseBlock, getWallet, getItemPrice } = queries;
   const blocked = getPurchaseBlock(item, { playerId: player.playerId });
   if (blocked) return reply(BLOCK_OUTCOME[blocked]);
 

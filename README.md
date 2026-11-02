@@ -315,8 +315,8 @@ along with the weekly runbook:
 | seasons   | `/admin/seasons`  | Part of the weeks area. Create seasons, make one current, close one to crown its champion (or reopen it), rename, and delete empty ones. Editor at `/admin/seasons/<id>`.                                                                                                                                                                                                       |
 | weeks     | `/admin/weeks`    | One row per task with its progress. Each week is a workspace with four tabs: **brief** (`/admin/weeks/<id>`: the task form, reveal password, delete), **judge** (`…/judge`: entries gallery with a points box per player or squad, or a plain grid when the task takes no entries, plus bonuses and the score history), **results night** (`…/live`) and **recap** (`…/recap`). |
 | roster    | `/admin/roster`   | Players (with sign-in accounts) and squads, per season; editors at `/admin/players/<id>` and `/admin/teams/<id>`.                                                                                                                                                                                                                                                               |
-| site      | `/admin/site`     | Feature flags, [polls](#️-polls), [mini-tasks](#-mini-tasks--achievements), the homepage changelog and the shop; editors at `/admin/polls/<id>`, `/admin/mini-tasks/<id>` and `/admin/changelog/<id>`; marketplace and [bounty](#-bounties) moderation at `/admin/market`.                                                                                                      |
-| activity  | `/admin/activity` | One season's timeline of everything that moved points or Clim Coin (score changes, coin grants, gifts, purchases, crates, power-ups, skills, wishes, mini-tasks, marketplace sales, bounties), filterable by kind and player, for disputes. The [economy report](#-economy-report) is at `/admin/economy`.                                                                      |
+| site      | `/admin/site`     | Feature flags, [polls](#️-polls), [mini-tasks](#-mini-tasks--achievements), the homepage changelog and the shop (items, [bundles and the deal of the week](#️-shop-extras)); editors at `/admin/polls/<id>`, `/admin/mini-tasks/<id>`, `/admin/changelog/<id>` and `/admin/shop/bundles/<id>`; marketplace and [bounty](#-bounties) moderation at `/admin/market`.              |
+| activity  | `/admin/activity` | One season's timeline of everything that moved points or Clim Coin (score changes, coin grants, gifts, purchases, crates, power-ups, skills, wishes, mini-tasks, marketplace sales, bounties, shop extras), filterable by kind and player, for disputes. The [economy report](#-economy-report) is at `/admin/economy`.                                                         |
 | guide     | `/admin/guide`    | How to use the admin.                                                                                                                                                                                                                                                                                                                                                           |
 
 The weeks and roster lists, the activity log, and the new week / player / squad forms, work on
@@ -518,7 +518,11 @@ derived from the results so a corrected score can't leave a stale bonus.
 
 A per-season currency. Players earn **Clim Coin** and spend it in the
 [`/shop`](src/pages/shop.astro) on pets, avatars, cosmetics (titles, name
-colours, profile themes) and power-ups. Their balance, history and inventory
+colours, profile themes, shell prompts and avatar frames), power-ups and
+[shop extras](#️-shop-extras). The shop is split into server-rendered tabs
+(`?tab=featured|eggs|power-ups|cosmetics|pets|extras`, links in
+`ShopTabs.astro`), each its own cacheable page; buying lands back on the tab
+it came from. Their balance, history and inventory
 live in the wallet section of their account page (`/account#wallet`, also
 linked from the navbar coin chip); everyone can see what a player wears, but
 only they (and admins) see their balance and inventory.
@@ -536,7 +540,7 @@ reads too. Wallets are per season: they belong to the season's player rows.
 `/admin/site#shop`), `coin_purchases` (price copied at purchase),
 `power_up_uses`, `equipped_items`, `coin_gifts`, `coin_adjustments` (admin
 grants and deductions, on the player's admin page), `item_gifts` and
-`egg_gifts` (see below). A purchase or gift checks
+`egg_gifts` (see below), and the [shop extras](#️-shop-extras)' rows. A purchase or gift checks
 the balance against fresh (uncached) rows, then re-checks it in the insert
 under a per-player advisory lock, so concurrent spends can't overspend. A
 balance can go negative if a result is corrected after spending; buying is
@@ -593,19 +597,45 @@ per player per week. Uses are public immediately (task page feed):
   tab) to that player only.
 - **Sabotage**: −5 to any other player that week (squad-mates included); each
   player can be sabotaged once a week, and the target is notified.
+- **Heist**: moves 5 points from another player to the user that week. It
+  shares Sabotage's one-hit-per-target limit, and Shields and Mirrors resolve
+  it the same way (a bounced Heist moves the points the other way).
+- **Freeze**: aimed at a player who hasn't used a power-up yet that week; they
+  can't use one for the rest of it (`getPowerUpBlock` → `frozen`). Public,
+  and Shields and Mirrors don't stop it.
+- **Spyglass**: privately reports whether the target held an unspent Shield
+  and/or Mirror at the moment it was used (`spyglassFindings`); the use is
+  public, the answer is only in the user's wallet.
+- **Coin Rush**: doubles every coin that week pays the player (placement,
+  entry, winner call and People's Choice vote), as a derived `coin-rush`
+  ledger line.
+- **Copycat**: copies a power-up another player used the week before
+  (`power_up_uses.copied_effect`); the use then acts as that effect everywhere
+  (`appliedEffect` in `coin-rules.ts`), target and all. It can't copy itself.
 
-**Passive power-ups** (`shield`, `mirror`, `insurance`) are bought once a
-season like the others but never used: the database refuses them in
+Targeted power-ups (Sabotage, Heist, Freeze, Spyglass, or a Copycat of one)
+name a target; the write takes a per-week advisory lock so a Freeze and its
+target's own power-up, or two hits on one player, can't both slip through.
+
+**Passive power-ups** (`shield`, `mirror`, `insurance`, `bounty_badge`,
+`underdog`) are bought once a season like the others but never used: the database refuses them in
 `power_up_uses`, and their effect is derived in `coins.ts`:
 
 - **Shield** blocks, and **Mirror** bounces back onto the saboteur, the first
-  Sabotage on the owner used after they bought it (a Mirror is spent before a
+  Sabotage or Heist on the owner used after they bought it (a Mirror is spent before a
   Shield). The resolution is fixed when the Sabotage happens, but it's secret:
   the target takes −5 as normal until the week's results are out, then the
   deduction is dropped (Shield) or moved to the saboteur (Mirror), the task
   feed says so and both players are notified.
 - **Insurance** pays 3rd-place coins instead of the base 2 for the first week
   (whose deadline was after the purchase) where the owner finished last.
+- **Bounty Badge** pays 50% extra (rounded up, minted rather than taken from
+  anyone) on the first bounty the owner wins after buying it
+  (`bountyBadgeClaims`).
+- **Underdog** gives +5 points on the week after the owner finishes in the
+  bottom half (below the top `ceil(n / 2)` places) of two published weeks in
+  a row, counting weeks whose deadline was after the purchase
+  (`underdogClaims`). A week without the owner's score resets the run.
 
 **One Wish Willow** (`wish`, 10 coins, once a season, can hatch from eggs
 like any power-up) is spent from the wallet, any time, by writing a wish of
@@ -649,9 +679,12 @@ Starter items and their pixel art (`public/shop`) are in `db/seed-data.ts`.
 let a player commit to one pathway a season and unlock it with Clim Coin. The
 five pathways (Stormbrewer, Elite Hacker, Friendkeeper, Overachiever and
 Elephant Cartographer, nods to storm mode and the squads) are defined in code
-in `src/data/skill-trees.ts`. Each has a root (5), two branches (8 each, root
-first) and a capstone (15, both branches first). Perks only ever touch Clim
-Coin, never points:
+in `src/data/skill-trees.ts`. Each has a root (5) and two branches (8 each,
+root first); each branch grows a spur (8) and then a tip (10), and the
+capstone (15) needs both branches: 72 coins for a full tree. `/skills` draws
+each pathway as a tree growing up from its root (`layoutSkillTree` in
+`src/lib/skill-ui.ts`); picking a node shows its card. Perks only ever touch
+Clim Coin, never points:
 
 - coin bonuses on entries, placings, calls, votes or power-ups used;
 - discounts on power-ups, eggs and wearables (pets, avatars and cosmetics);
@@ -661,8 +694,9 @@ Coin, never points:
 The pathways are balanced on one value model: about 10 of each weekly event
 in a season, 5 poll votes, 4 power-ups used and about 5 discounted purchases
 of a kind. On that model every pathway's root is worth ~14 coins, its perk
-branch ~16, its title branch ~10 and its capstone ~24, so a full 36-coin tree
-pays back about 64. Each node's perks are listed on its card, generated from
+branch ~16, its title branch ~10, each spur ~11 to 12, its perk tip ~13 to 15,
+its title tip ~12 and its capstone ~24, so a full 72-coin tree pays back about
+113. Each node's perks are listed on its card, generated from
 the data. A test in `skill-trees.test.ts` fails if a retune breaks the balance.
 
 Earning perks are derived in `deriveEarnings` and only pay on coins that land
@@ -676,7 +710,8 @@ every unlock in that pathway. `unlockSkillNode` writes in one statement under
 the wallet lock and re-checks the budget, prerequisites and pathway.
 
 Title and name-colour rewards are `shop_items` with `skill_only` set. They're
-never sold or hatched, are seeded by the `0027_skill_trees` migration and
+never sold or hatched, are seeded by the `0027_skill_trees` and
+`0035_skill_tree_titles` migrations and
 `db/seed-data.ts`, and are owned through a zero-price `coin_purchases` row
 (`skill_unlocks.purchase_id`), like crate wins.
 
@@ -687,8 +722,8 @@ already unlocked keeps working.
 lets players resell what they own to other players in their season. Pets,
 avatars, cosmetics, egg exclusives and unused power-up charges can be listed
 (`isTradeable` in `coin-rules.ts`). Skill tree rewards can't, and nor can
-Shield, Mirror or Insurance, because their charges are spent by derived
-effects that a sale couldn't re-check. The seller sets a price between 50% and
+passive power-ups (Shield, Mirror, Insurance, Bounty Badge, Underdog), because
+their charges are spent by derived effects that a sale couldn't re-check. The seller sets a price between 50% and
 300% of the shop price (5–60 for egg exclusives, `marketPriceRange`). Buyers
 pay that price or make a lower offer. There's no fee, and listings lapse after
 7 days (`MARKET_LISTING_DAYS`).
@@ -716,6 +751,43 @@ pay that price or make a lower offer. There's no fee, and listings lapse after
   revoked.
 - **Notifications:** the seller hears about offers, sales and expired
   listings; the buyer hears whether their offer was accepted or declined.
+
+### 🛍️ Shop extras
+
+Beyond buying items one at a time, the shop has a few extras. All of them
+spend through the same SQL `budget` and wallet lock as everything else
+(`src/data/shop.ts`), and post to `/account/shop-extras`.
+
+- **Deal of the week** (`shop_deals` flag): one item 30% off
+  (`DEAL_DISCOUNT_PERCENT`), Monday to Monday UK time. The pick is derived
+  (`pickDeal` in `src/data/shop-extras.ts`): a stable hash of the week over
+  everything sold directly, always on the shelves and at least 4 coins.
+  An admin can choose the item and discount (5–90%) for this week or the next
+  three at `/admin/site#deal` (`shop_deals` rows). Skill tree discounts come
+  off the deal price.
+- **Bundles** (`shop_bundles` flag): several items for one price, managed at
+  `/admin/site#bundles` (`shop_bundles` + `shop_bundle_items`). Buying one
+  writes a `bundle_purchases` row and a zero-price `coin_purchases` row per
+  item (`bundle_purchase_id`), in one statement under the wallet and stock
+  locks. It's refused if the player has had any item (or power-up effect) in
+  it. Bundle copies count towards limited stock.
+- **Weekly raffle** (`shop_raffle` flag): up to 5 tickets a player
+  (`RAFFLE_MAX_TICKETS`, 2 coins each) for the live week, one
+  `raffle_tickets` row per ticket. When the week's deadline passes, one ticket
+  wins the pot. The draw is derived (`drawRaffles`) from a hash of every
+  ticket's secret `nonce` (random, generated by Postgres and never shown), so
+  nobody can predict or steer it, and it never changes afterwards (tickets
+  can't be bought once the week closes).
+- **Rename tokens** (always on): bought any number of times (3 coins,
+  `rename_tokens`), then spent naming one of the player's pets (up to 24
+  characters). The newest spent token for a pet is its name, shown wherever
+  the pet appears.
+- **Gift wrap** (`shop_gift_wrap` flag): buy a pet, avatar or cosmetic (not a
+  power-up) for another player in the season who's never had it, for its
+  price plus a 2-coin fee (`GIFT_WRAP_FEE`). Optional 80-character note and
+  anonymous sender. The recipient owns it through a zero-price purchase
+  (`wrapped_gifts.purchase_id`) and is notified. A wrapped copy counts towards
+  limited stock.
 
 ### 🎯 Bounties
 
@@ -757,8 +829,10 @@ always agrees with what players see:
 - **Supply by week** (UK Monday to Sunday): coins in, coins out and the
   running total.
 - **By source:** task placements, entries, votes and predictions,
-  mini-tasks, skill perks, admin grants and deductions, shop purchases, eggs,
-  skill unlocks, gifts, the marketplace and bounties. Transfers count once,
+  mini-tasks, skill perks, power-up bonuses (Coin Rush and Bounty Badge),
+  admin grants and deductions, shop purchases (including bundles, rename
+  tokens and gift wrap), eggs, skill unlocks, gifts, the marketplace, bounties
+  and raffle pots. Transfers count once,
   on the receiving side.
 - **Top 10 holders**, and **shop sales and stock** per item (direct shop
   purchases only, like limited stock) plus egg sales.
@@ -794,15 +868,19 @@ feature ships disabled. Flags load with the rest of the competition rows
 is purged and the change shows straight away. Read them from
 `getQueries().features`.
 
-| Flag           | Off (default)                                                                                                                                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `shop_eggs`    | Hides the mystery eggs, recent hatches and egg-exclusive items in the shop and rules; eggs can't be opened.                                                                                                                                                              |
-| `storm_mode`   | Clear skies. On: the public site (not `/admin`) is hit by a hurricane — rain, lightning, gusts, shake and "A Storm Is Brewing" blown across the screen. Pure CSS (`StormMode.astro` + `:root[data-storm]` in `global.css`), click-through, and still for reduced motion. |
-| `skill_trees`  | Hides `/skills`, its nav, shop and wallet links, the rules section and pathway sigils; nobody can unlock. Perks and rewards already unlocked keep working.                                                                                                               |
-| `mini_tasks`   | Hides the mini-task panels on the homepage and `/account`. Admins can still set mini-tasks and tick off completions, and coin already earned stays in wallets.                                                                                                           |
-| `achievements` | Hides `/account/achievements` (404) and its links.                                                                                                                                                                                                                       |
-| `marketplace`  | Hides `/market`, `/account/market` (404) and their links, the rules section and the wallet's sell links; nobody can list, buy or offer. Open listings and offers lapse on their own.                                                                                     |
-| `bounties`     | Hides `/bounties` (404), its nav and palette links and bounty notifications; nobody can post, claim or award. Open bounties keep their coins held until they lapse.                                                                                                      |
+| Flag             | Off (default)                                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `shop_eggs`      | Hides the mystery eggs, recent hatches and egg-exclusive items in the shop and rules; eggs can't be opened.                                                                                                                                                              |
+| `storm_mode`     | Clear skies. On: the public site (not `/admin`) is hit by a hurricane — rain, lightning, gusts, shake and "A Storm Is Brewing" blown across the screen. Pure CSS (`StormMode.astro` + `:root[data-storm]` in `global.css`), click-through, and still for reduced motion. |
+| `skill_trees`    | Hides `/skills`, its nav, shop and wallet links, the rules section and pathway sigils; nobody can unlock. Perks and rewards already unlocked keep working.                                                                                                               |
+| `mini_tasks`     | Hides the mini-task panels on the homepage and `/account`. Admins can still set mini-tasks and tick off completions, and coin already earned stays in wallets.                                                                                                           |
+| `achievements`   | Hides `/account/achievements` (404) and its links.                                                                                                                                                                                                                       |
+| `marketplace`    | Hides `/market`, `/account/market` (404) and their links, the rules section and the wallet's sell links; nobody can list, buy or offer. Open listings and offers lapse on their own.                                                                                     |
+| `bounties`       | Hides `/bounties` (404), its nav and palette links and bounty notifications; nobody can post, claim or award. Open bounties keep their coins held until they lapse.                                                                                                      |
+| `shop_deals`     | No deal of the week: everything sells at full price. Admin picks stay saved for when it's back on.                                                                                                                                                                       |
+| `shop_bundles`   | Hides bundles in the shop; nobody can buy one. Items already bought in one stay put.                                                                                                                                                                                     |
+| `shop_raffle`    | Hides the raffle on the extras tab; tickets can't be bought. Weeks already drawn still pay out.                                                                                                                                                                          |
+| `shop_gift_wrap` | Hides gift wrap on the extras tab; nobody can wrap. Gifts already sent stay put.                                                                                                                                                                                         |
 
 ## 🔔 Notifications
 
@@ -820,11 +898,11 @@ a dropdown (a full-height drawer on phones) listing the newest 20 events:
   player up the leaderboard.
 - **Bonuses and deductions** the player is given (not the automatic
   poll-voting, People's Choice or prediction bonuses).
-- **Sabotage**, when another player uses the Clim Coin power-up on them, and
-  once the week's results are out, whether a **Shield or Mirror** stopped it
-  (the saboteur hears about a bounce too).
-- **Gifts** of Clim Coin from another player, and Clim Coin grants or
-  items an admin gifted them.
+- **Sabotage, Heist and Freeze**, when another player uses one on them, and
+  once the week's results are out, whether a **Shield or Mirror** stopped a
+  Sabotage or Heist (its user hears about a bounce too).
+- **Gifts** of Clim Coin from another player, items gift-wrapped for them,
+  Clim Coin grants or items an admin gifted them, and **raffle wins**.
 - **Wishes** granted or declined by the Taskmaster, with their reply.
 - **Mini-tasks** an admin ticked them off for, with the coin it paid.
 

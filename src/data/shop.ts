@@ -1,7 +1,8 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, type SQL, sql } from "drizzle-orm";
 import type {
   ActivePowerUpKind,
   CoinOutcome,
+  CopyablePowerUpKind,
   Crate,
   CrateTierKind,
   LoadoutSlot,
@@ -9,6 +10,7 @@ import type {
 import { getDb } from "../db";
 import {
   bounties,
+  bundlePurchases,
   coinAdjustments,
   coinGifts,
   coinPurchases,
@@ -21,15 +23,25 @@ import {
   marketSales,
   players,
   powerUpUses,
+  raffleTickets,
+  renameTokens,
+  shopBundleItems,
+  shopBundles,
   shopItems,
   skillUnlocks,
+  tasks,
   wishes,
+  wrappedGifts,
 } from "../db/schema";
 import { violatedConstraint } from "./db-errors";
 import {
   BOUNTY_DAYS,
   GIFT_WEEKLY_CAP,
+  GIFT_WRAP_FEE,
   MARKET_LISTING_DAYS,
+  RAFFLE_MAX_TICKETS,
+  RAFFLE_TICKET_PRICE,
+  RENAME_TOKEN_PRICE,
 } from "./coin-rules";
 
 // Clim Coin writes a player makes from `/account` (the middleware has
@@ -110,6 +122,14 @@ export const budget = (
         where winner_id = ${playerId} and status = 'awarded'), 0)
     - coalesce((select sum(reward) from ${bounties}
         where poster_id = ${playerId} and status = 'awarded'), 0)
+    - coalesce((select sum(price) from ${raffleTickets}
+        where player_id = ${playerId}), 0)
+    - coalesce((select sum(price) from ${renameTokens}
+        where player_id = ${playerId}), 0)
+    - coalesce((select sum(price + fee) from ${wrappedGifts}
+        where from_player_id = ${playerId}), 0)
+    - coalesce((select sum(price) from ${bundlePurchases}
+        where player_id = ${playerId}), 0)
     - ${heldByOffers(playerId, exceptListingId)}
     - ${heldByBounties(playerId)}`;
 
@@ -204,6 +224,216 @@ export async function buyItem(
       returning id`),
   ]);
   return inserted.rows.length > 0;
+}
+
+/** Whether `item` (a `shop_items` alias) is a power-up `playerId` has had. */
+const ownsItemOrEffect = (playerId: string | SQL) => sql`exists (
+  select 1 from ${coinPurchases} owned
+  join ${shopItems} owned_item on owned_item.id = owned.item_id
+  where owned.player_id = ${playerId}
+    and (
+      owned.item_id = item.id
+      or owned_item.power_up = item.power_up
+    ))`;
+
+/**
+ * Buys `itemId` for another player in the same season (gift wrap), at
+ * `price` (what the sender would pay, worked out by the caller) plus the
+ * wrap fee. The recipient owns it through a zero-price purchase written in
+ * the same statement, as long as they've never had it; power-ups can't be
+ * wrapped. Checked under the sender's wallet lock, and the item's stock
+ * lock (a wrapped copy is a shop sale).
+ */
+export async function wrapGift(
+  fromPlayerId: string,
+  toPlayerId: string,
+  itemId: string,
+  price: number,
+  anonymous: boolean,
+  message: string | null,
+  earned: number,
+): Promise<boolean> {
+  const db = getDb();
+  const cost = price + GIFT_WRAP_FEE;
+  const [, , wrapped] = await db.batch([
+    db.execute(lockWallet(fromPlayerId)),
+    db.execute(lockStock(itemId)),
+    db.execute(sql`
+      with eligible as (
+        select item.id, sender.season_id
+        from ${shopItems} item
+        join ${players} sender on sender.id = ${fromPlayerId}
+        join ${players} recipient
+          on recipient.id = ${toPlayerId}
+          and recipient.season_id = sender.season_id
+        where item.id = ${itemId}
+          and recipient.id <> sender.id
+          and item.category <> 'power_up'
+          and item.available
+          and ${onSaleNow("item")}
+          and not item.crate_only
+          and not item.skill_only
+          and not ${ownsItemOrEffect(toPlayerId)}
+          and (item.stock is null
+            or item.stock > ${shopSoldThisSeason(toPlayerId)})
+          and (${budget(fromPlayerId, earned)}) >= ${cost}::integer
+      ),
+      given as (
+        insert into ${coinPurchases} (player_id, item_id, price)
+        select ${toPlayerId}, id, 0 from eligible
+        returning id, item_id
+      )
+      insert into ${wrappedGifts}
+        (season_id, from_player_id, to_player_id, item_id, purchase_id,
+          price, fee, anonymous, message)
+      select eligible.season_id, ${fromPlayerId}, ${toPlayerId}, given.item_id,
+        given.id, ${price}::integer, ${GIFT_WRAP_FEE}::integer,
+        ${anonymous}, ${message}::text
+      from given cross join eligible
+      returning id`),
+  ]);
+  return wrapped.rows.length > 0;
+}
+
+/**
+ * Buys `bundleId` for the player at its price: one zero-price purchase per
+ * item, pointing back at the bundle purchase, all in one statement under
+ * the wallet lock. Refused if the bundle or any item is off sale, any item
+ * is out of stock, or the player has had any item (or a power-up's effect).
+ */
+export async function buyBundle(
+  playerId: string,
+  bundleId: string,
+  earned: number,
+): Promise<boolean> {
+  const db = getDb();
+  const [, , bought] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    // Each item's stock lock, in a fixed order so two bundles can't deadlock.
+    db.execute(sql`
+      select pg_advisory_xact_lock(hashtext('shop-stock:' || item_id))
+      from (select item_id from ${shopBundleItems}
+        where bundle_id = ${bundleId} order by item_id) locked`),
+    db.execute(sql`
+      with bundle as (
+        select b.id, b.price from ${shopBundles} b
+        where b.id = ${bundleId}
+          and b.available
+          and exists (select 1 from ${shopBundleItems} bi
+            where bi.bundle_id = b.id)
+          and not exists (
+            select 1 from ${shopBundleItems} bi
+            join ${shopItems} item on item.id = bi.item_id
+            where bi.bundle_id = b.id
+              and (not item.available
+                or not (${onSaleNow("item")})
+                or item.crate_only
+                or item.skill_only
+                or ${ownsItemOrEffect(playerId)}
+                or (item.stock is not null
+                  and item.stock <= ${shopSoldThisSeason(playerId)}))
+          )
+          and (${budget(playerId, earned)}) >= b.price
+      ),
+      bought as (
+        insert into ${bundlePurchases} (player_id, bundle_id, price)
+        select ${playerId}, id, price from bundle
+        returning id, bundle_id
+      )
+      insert into ${coinPurchases} (player_id, item_id, price, bundle_purchase_id)
+      select ${playerId}, bi.item_id, 0, bought.id
+      from bought
+      join ${shopBundleItems} bi on bi.bundle_id = bought.bundle_id
+      returning id`),
+  ]);
+  return bought.rows.length > 0;
+}
+
+/**
+ * Buys `count` raffle tickets for the live week `taskId`, if the week is
+ * still open (released, deadline not yet passed, UK wall clock), it keeps
+ * the player within the weekly limit, and they can afford them. Checked
+ * under the wallet lock. Returns how many were bought (0 or `count`).
+ */
+export async function buyRaffleTickets(
+  playerId: string,
+  taskId: string,
+  count: number,
+  earned: number,
+): Promise<number> {
+  const db = getDb();
+  const [, bought] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    db.execute(sql`
+      insert into ${raffleTickets} (task_id, player_id, price)
+      select week.id, buyer.id, ${RAFFLE_TICKET_PRICE}::integer
+      from ${tasks} week
+      join ${players} buyer
+        on buyer.id = ${playerId} and buyer.season_id = week.season_id
+      cross join generate_series(1, ${count}::integer)
+      where week.id = ${taskId}
+        and week.release_date <= (now() at time zone 'Europe/London')
+        and week.deadline > (now() at time zone 'Europe/London')
+        and ${count}::integer between 1 and ${RAFFLE_MAX_TICKETS}::integer
+        and ${count}::integer + (select count(*) from ${raffleTickets} mine
+            where mine.player_id = ${playerId} and mine.task_id = week.id)
+          <= ${RAFFLE_MAX_TICKETS}::integer
+        and (${budget(playerId, earned)})
+          >= ${count}::integer * ${RAFFLE_TICKET_PRICE}::integer
+      returning id`),
+  ]);
+  return bought.rows.length;
+}
+
+/** Buys one rename token, if the player can afford it (wallet lock). */
+export async function buyRenameToken(
+  playerId: string,
+  earned: number,
+): Promise<boolean> {
+  const db = getDb();
+  const [, bought] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    db.execute(sql`
+      insert into ${renameTokens} (player_id, price)
+      select ${playerId}, ${RENAME_TOKEN_PRICE}::integer
+      where (${budget(playerId, earned)}) >= ${RENAME_TOKEN_PRICE}::integer
+      returning id`),
+  ]);
+  return bought.rows.length > 0;
+}
+
+/**
+ * Spends the player's oldest unspent rename token naming their pet
+ * `itemId` (a pet they hold now). Returns whether it was renamed.
+ */
+export async function renamePet(
+  playerId: string,
+  itemId: string,
+  name: string,
+): Promise<boolean> {
+  const db = getDb();
+  const [, renamed] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    db.execute(sql`
+      update ${renameTokens} set item_id = ${itemId}, name = ${name},
+        used_at = now()
+      where id = (
+        select token.id from ${renameTokens} token
+        where token.player_id = ${playerId} and token.used_at is null
+        order by token.id
+        limit 1
+      )
+      and exists (
+        select 1 from ${coinPurchases} owned
+        join ${shopItems} pet on pet.id = owned.item_id
+        where owned.player_id = ${playerId}
+          and owned.item_id = ${itemId}
+          and pet.category = 'pet'
+          and ${heldCopy("owned")}
+      )
+      returning id`),
+  ]);
+  return renamed.rows.length > 0;
 }
 
 /**
@@ -426,38 +656,92 @@ const USE_CONSTRAINT_OUTCOMES: Record<string, CoinOutcome> = {
   power_up_uses_purchase_id_unique: "no-charge",
   power_up_uses_not_self: "invalid",
   power_up_uses_target_player_id_players_id_fk: "invalid",
+  power_up_uses_target_when_targeted: "invalid",
+  power_up_uses_copied_when_copycat: "invalid",
+  power_up_uses_copied_active: "invalid",
 };
 
 /**
- * Spends the player's unused charge of `effect` on `taskId`. The caller has
- * checked the week is live and the target valid; the constraints enforce
- * one use of each power-up per player a season, one power-up per player per
- * week and one Sabotage per target per week.
+ * Serialises power-up uses on one week, so a Freeze and its target's own
+ * power-up (or two Heists on one player) can't both slip through.
+ */
+const lockWeek = (taskId: string) =>
+  sql`select pg_advisory_xact_lock(hashtext(${`power-ups:${taskId}`}))`;
+
+/** A `power_up_uses` alias's effect, a Copycat counting as what it copied. */
+const appliedSql = (use: string) =>
+  sql.raw(`coalesce(${use}.copied_effect, ${use}.effect)`);
+
+/**
+ * Spends the player's unused charge of `effect` on `taskId` (a Copycat
+ * acting as `copiedEffect`). The caller has checked the week is live and
+ * the target and copy valid; the constraints enforce one use of each
+ * power-up per player a season, one power-up per player per week and one
+ * Sabotage per target per week. Under a per-week lock the write also
+ * re-checks that the player isn't frozen, that a Freeze's target hasn't
+ * used a power-up yet, and that a Sabotage's or Heist's target hasn't
+ * already been hit.
  */
 export async function usePowerUp(
   playerId: string,
   taskId: string,
   effect: ActivePowerUpKind,
+  copiedEffect: CopyablePowerUpKind | null,
   targetPlayerId: string | null,
 ): Promise<CoinOutcome> {
+  const applied = copiedEffect ?? effect;
+  const db = getDb();
+  const frozen = sql`exists (
+    select 1 from ${powerUpUses} f
+    where f.task_id = ${taskId}
+      and f.target_player_id = ${playerId}
+      and ${appliedSql("f")} = 'freeze')`;
+  const targetUsed = sql`exists (
+    select 1 from ${powerUpUses} t
+    where t.task_id = ${taskId} and t.player_id = ${targetPlayerId}::text)`;
+  const targetHit = sql`exists (
+    select 1 from ${powerUpUses} h
+    where h.task_id = ${taskId}
+      and h.target_player_id = ${targetPlayerId}::text
+      and ${appliedSql("h")} in ('sabotage', 'heist'))`;
   try {
-    const inserted = await getDb().execute(sql`
-      insert into ${powerUpUses}
-        (purchase_id, player_id, task_id, effect, target_player_id)
-      select charge.id, ${playerId}, ${taskId}, ${effect}::power_up_kind,
-        ${targetPlayerId}::text
-      from ${coinPurchases} charge
-      join ${shopItems} item on item.id = charge.item_id
-      where charge.player_id = ${playerId}
-        and item.power_up = ${effect}::power_up_kind
-        and ${heldCopy("charge")}
-        and not exists (
-          select 1 from ${powerUpUses} spent where spent.purchase_id = charge.id
-        )
-      order by charge.id
-      limit 1
-      returning id`);
-    return inserted.rows.length > 0 ? "used" : "no-charge";
+    const [, inserted, why] = await db.batch([
+      db.execute(lockWeek(taskId)),
+      db.execute(sql`
+        insert into ${powerUpUses}
+          (purchase_id, player_id, task_id, effect, copied_effect,
+            target_player_id)
+        select charge.id, ${playerId}, ${taskId}, ${effect}::power_up_kind,
+          ${copiedEffect}::power_up_kind, ${targetPlayerId}::text
+        from ${coinPurchases} charge
+        join ${shopItems} item on item.id = charge.item_id
+        where charge.player_id = ${playerId}
+          and item.power_up = ${effect}::power_up_kind
+          and ${heldCopy("charge")}
+          and not exists (
+            select 1 from ${powerUpUses} spent
+            where spent.purchase_id = charge.id
+          )
+          and not ${frozen}
+          ${applied === "freeze" ? sql`and not ${targetUsed}` : sql``}
+          ${applied === "sabotage" || applied === "heist" ? sql`and not ${targetHit}` : sql``}
+        order by charge.id
+        limit 1
+        returning id`),
+      db.execute(sql`
+        select ${frozen} as frozen, ${targetUsed} as target_used,
+          ${targetHit} as target_hit`),
+    ]);
+    if (inserted.rows.length > 0) return "used";
+    const reason = why.rows[0] as
+      | { frozen?: boolean; target_used?: boolean; target_hit?: boolean }
+      | undefined;
+    if (reason?.frozen) return "frozen";
+    if (applied === "freeze" && reason?.target_used) return "target-used";
+    if ((applied === "sabotage" || applied === "heist") && reason?.target_hit) {
+      return "already-sabotaged";
+    }
+    return "no-charge";
   } catch (error) {
     const outcome = USE_CONSTRAINT_OUTCOMES[violatedConstraint(error) ?? ""];
     if (outcome) return outcome;

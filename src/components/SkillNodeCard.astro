@@ -10,6 +10,7 @@ import {
   SKILL_ACCENT_CLASS,
   SKILL_BLOCK_LABEL,
   describePerk,
+  skillNodeRole,
 } from "../lib/skill-ui";
 import { btnPrimary } from "./admin/styles";
 import { withBase } from "../lib/url";
@@ -29,7 +30,7 @@ const action = withBase(`/account/skills/${encodeURIComponent(node.id)}`);
 const loginHref = withBase(
   `/login?${new URLSearchParams({ next: `/account/skills/${node.id}` })}`,
 );
-const TIER_LABEL = { 1: "root", 2: "branch", 3: "capstone" } as const;
+const role = skillNodeRole(node);
 const rewardColour: NameColour | undefined =
   reward?.cosmetic?.kind === "name_colour"
     ? NAME_COLOURS.find((c) => c === reward.cosmetic?.value)
@@ -53,7 +54,7 @@ const rewardTitle =
   <div class="flex items-start justify-between gap-2">
     <div class="min-w-0">
       <p class="text-[10px] uppercase tracking-[0.2em] text-ink-faint">
-        tier {node.tier} · {TIER_LABEL[node.tier]}
+        tier {node.tier} · {role}
       </p>
       <h4
         class:list={[

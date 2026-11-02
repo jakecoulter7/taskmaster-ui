@@ -11,17 +11,40 @@ import {
   tableHead,
 } from "../../../components/admin/styles";
 import {
+  clearDealOverride,
+  describeWriteError,
+  listBundles,
   listChangelog,
+  listDealOverrides,
   listFeatureFlags,
   listMiniTasks,
   listShopItems,
+  setDealOverride,
   setFeatureFlag,
 } from "../../../data/admin";
+import AdminField from "../../../components/admin/AdminField.astro";
+import {
+  dealWeekBounds,
+  dealWeekStart,
+  mapDealOverrides,
+  pickDeal,
+} from "../../../data/shop-extras";
+import { mapShopItems } from "../../../data/coins";
+import { DEAL_DISCOUNT_PERCENT, dealPrice } from "../../../data/coin-rules";
+import {
+  inputClass,
+  labelClass,
+} from "../../../components/admin/styles";
 import { deriveMiniTaskStatus, ukToday } from "../../../data/mini-tasks";
 import CoinAmount from "../../../components/CoinAmount.astro";
 import type { MiniTaskStatus } from "../../../types";
 import { FEATURE_FLAGS } from "../../../data/feature-flags";
-import { parseFeatureFlagForm } from "../../../lib/admin-forms";
+import {
+  parseDealForm,
+  parseFeatureFlagForm,
+  type FieldErrors,
+  type FormValues,
+} from "../../../lib/admin-forms";
 import {
   CATEGORY_INFO,
   POWER_UP_INFO,
@@ -40,9 +63,39 @@ import {
 const admin = Astro.locals.admin;
 if (!admin) return Astro.redirect(withBase("/login"));
 
-// The only form posted here: a feature flag toggle.
-if (Astro.request.method === "POST") {
-  const toggle = parseFeatureFlagForm(await Astro.request.formData());
+// Forms posted here: a feature flag toggle, and the deal of the week
+// override (set or cleared, by `intent`).
+let dealValues: FormValues = { discountPercent: String(DEAL_DISCOUNT_PERCENT) };
+let dealErrors: FieldErrors = {};
+let dealError: string | undefined;
+const form =
+  Astro.request.method === "POST" ? await Astro.request.formData() : undefined;
+if (form?.get("intent") === "clear-deal") {
+  const weekStart = String(form.get("weekStart") ?? "");
+  await clearDealOverride(weekStart);
+  const query = new URLSearchParams({ done: "deal-cleared", name: weekStart });
+  return Astro.redirect(withBase(`/admin/site?${query}#deal`), 303);
+}
+if (form?.get("intent") === "deal") {
+  const parsed = parseDealForm(form);
+  dealValues = parsed.values;
+  if (!parsed.ok) {
+    dealErrors = parsed.errors;
+  } else {
+    try {
+      await setDealOverride(parsed.data, admin);
+      const query = new URLSearchParams({
+        done: "deal-set",
+        name: parsed.data.weekStart,
+      });
+      return Astro.redirect(withBase(`/admin/site?${query}#deal`), 303);
+    } catch (error) {
+      dealError = describeWriteError(error);
+      if (!dealError) throw error;
+    }
+  }
+} else if (form) {
+  const toggle = parseFeatureFlagForm(form);
   if (!toggle) return Astro.redirect(withBase("/admin/site#flags"), 303);
   await setFeatureFlag(toggle.key, toggle.enabled, admin);
   const query = new URLSearchParams({
@@ -54,14 +107,45 @@ if (Astro.request.method === "POST") {
 
 // Mini-tasks belong to a season: this screen lists the current one's.
 const currentSeason = (await Astro.locals.getSeasons()).current;
-const [{ getPollSummaries, players }, changelog, shop, flags, miniTasks] =
-  await Promise.all([
-    Astro.locals.getQueries(),
-    listChangelog(),
-    listShopItems(),
-    listFeatureFlags(),
-    currentSeason ? listMiniTasks(currentSeason.id) : Promise.resolve([]),
-  ]);
+const [
+  { getPollSummaries, players },
+  changelog,
+  shop,
+  flags,
+  miniTasks,
+  bundles,
+  dealRows,
+] = await Promise.all([
+  Astro.locals.getQueries(),
+  listChangelog(),
+  listShopItems(),
+  listFeatureFlags(),
+  currentSeason ? listMiniTasks(currentSeason.id) : Promise.resolve([]),
+  listBundles(),
+  listDealOverrides(),
+]);
+// The deal of the week: this week's (automatic or picked) and the picks
+// made for the weeks ahead.
+const catalogue = mapShopItems(shop);
+const overrides = mapDealOverrides(dealRows);
+const thisWeek = dealWeekStart();
+const currentDeal = pickDeal(catalogue, overrides);
+const upcomingOverrides = overrides
+  .filter((o) => o.weekStart >= thisWeek)
+  .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+const dealWeeks = [0, 1, 2, 3].map((n) => {
+  const start = new Date(`${thisWeek}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() + n * 7);
+  const weekStart = start.toISOString().slice(0, 10);
+  return { weekStart, label: n === 0 ? `this week (${weekStart})` : weekStart };
+});
+const dealItems = catalogue.filter(
+  (item) => item.available && !item.crateOnly && !item.skillOnly,
+);
+const itemName = new Map(catalogue.map((item) => [item.id, item.name]));
+const dealsOn = flags.find((f) => f.key === "shop_deals")?.enabled ?? false;
+const bundlesOn = flags.find((f) => f.key === "shop_bundles")?.enabled ?? false;
+const dayFmt = ukDateFormat({ weekday: "short", day: "numeric", month: "short" });
 const today = ukToday();
 const miniTaskPage = paginate(
   miniTasks,
@@ -127,7 +211,8 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
   </h1>
   <p class="mt-1 max-w-prose text-sm text-ink-dim">
     The extras around the competition: feature flags, polls for players to vote
-    on, mini-tasks, the "what's new" list, and the Clim Coin shop.
+    on, mini-tasks, the "what's new" list, and the Clim Coin shop (with its
+    bundles and deal of the week).
   </p>
 
   {
@@ -139,7 +224,11 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
             ? `Turned on "${subject}".`
             : done === "flag-off"
               ? `Turned off "${subject}".`
-              : `Saved "${subject}".`}
+              : done === "deal-set"
+                ? `Set the deal for the week of ${subject}.`
+                : done === "deal-cleared"
+                  ? `The week of ${subject} is back on the automatic deal.`
+                  : `Saved "${subject}".`}
       </Notice>
     )
   }
@@ -643,5 +732,226 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
       itemLabel="items"
       class="mt-3"
     />
+  </section>
+
+  <section
+    id="bundles"
+    aria-labelledby="bundles-heading"
+    class="mt-10 scroll-mt-24"
+  >
+    <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2
+          id="bundles-heading"
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+        >
+          bundles ({bundles.length})
+        </h2>
+        <p class="mt-1 text-xs text-ink-faint">
+          Several shop items for one price, on the shop's featured tab while the{" "}
+          <a href="#flags" class="text-cyan hover:underline">bundles flag</a> is{" "}
+          {bundlesOn ? "on" : "off (it's off now)"}. Players who've had any of
+          a bundle's items can't buy it.
+        </p>
+      </div>
+      <a href={withBase("/admin/shop/bundles/new")} class={btnGhost}>
+        + new bundle
+      </a>
+    </div>
+    <TerminalWindow title="~/site/bundles" bodyClass="p-0 sm:p-0">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr>
+              <th scope="col" class={tableHead}>bundle</th>
+              <th scope="col" class:list={[tableHead, "hidden md:table-cell"]}>
+                items
+              </th>
+              <th scope="col" class={tableHead}>price</th>
+              <th scope="col" class={tableHead}>sold</th>
+              <th scope="col" class={tableHead}
+                ><span class="sr-only">actions</span></th
+              >
+            </tr>
+          </thead>
+          <tbody>
+            {
+              bundles.map((bundle) => (
+                <tr class="transition-colors hover:bg-term-panel-2">
+                  <td class={tableCell}>
+                    <span class="text-ink">{bundle.name}</span>
+                    {!bundle.available && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-ink-faint">
+                        retired
+                      </span>
+                    )}
+                  </td>
+                  <td
+                    class:list={[
+                      tableCell,
+                      "hidden text-xs text-ink-dim md:table-cell",
+                    ]}
+                  >
+                    {bundle.itemIds
+                      .map((id) => itemName.get(id) ?? id)
+                      .join(", ")}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-amber"]}>
+                    {bundle.price}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-ink-dim"]}>
+                    {bundle.purchases}
+                  </td>
+                  <td class:list={[tableCell, "text-right whitespace-nowrap"]}>
+                    <a
+                      href={withBase(`/admin/shop/bundles/${bundle.id}`)}
+                      class="text-cyan hover:underline"
+                      aria-label={`Edit ${bundle.name}`}
+                    >
+                      edit
+                    </a>
+                  </td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+        {
+          bundles.length === 0 && (
+            <p class="p-6 text-sm text-ink-dim">
+              No bundles yet.{" "}
+              <a
+                href={withBase("/admin/shop/bundles/new")}
+                class="text-cyan hover:underline"
+              >
+                Make one
+              </a>
+              .
+            </p>
+          )
+        }
+      </div>
+    </TerminalWindow>
+  </section>
+
+  <section id="deal" aria-labelledby="deal-heading" class="mt-10 scroll-mt-24">
+    <h2
+      id="deal-heading"
+      class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      deal of the week
+    </h2>
+    <p class="mt-1 mb-3 text-xs text-ink-faint">
+      Each week (Monday to Monday, UK time) one item sells at a discount: {
+        DEAL_DISCOUNT_PERCENT
+      }% off an automatic pick, unless you choose the item and discount
+      yourself. Shown while the{" "}
+      <a href="#flags" class="text-cyan hover:underline">deal of the week flag</a
+      > is {dealsOn ? "on" : "off (it's off now)"}.
+    </p>
+    <TerminalWindow title="~/site/deal" meta={`week of ${thisWeek}`}>
+      <div class="space-y-5">
+        {
+          currentDeal ? (
+            <p class="text-sm text-ink-dim">
+              <span class="text-magenta">%</span> This week:{" "}
+              <span class="font-bold text-ink">{currentDeal.item.name}</span>,{" "}
+              {currentDeal.discountPercent}% off (
+              {dealPrice(currentDeal.item.price, currentDeal.discountPercent)}{" "}
+              instead of {currentDeal.item.price}),{" "}
+              {currentDeal.automatic ? "picked automatically" : "picked by you"}
+              . Ends{" "}
+              {dayFmt.format(
+                new Date(dealWeekBounds(currentDeal.weekStart).endsAt),
+              )}
+              .
+            </p>
+          ) : (
+            <p class="text-sm text-ink-dim">
+              Nothing in the shop can be the deal this week.
+            </p>
+          )
+        }
+        {
+          upcomingOverrides.length > 0 && (
+            <ul class="divide-y divide-grid/60 rounded-md border border-grid text-sm">
+              {upcomingOverrides.map((o) => (
+                <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                  <span class="text-ink-dim">
+                    <span class="text-ink-faint tabular-nums">
+                      {o.weekStart}
+                    </span>{" "}
+                    <span class="font-bold text-ink">
+                      {itemName.get(o.itemId) ?? o.itemId}
+                    </span>{" "}
+                    · {o.discountPercent}% off · by {o.actorName}
+                  </span>
+                  <form method="post">
+                    <input type="hidden" name="intent" value="clear-deal" />
+                    <input type="hidden" name="weekStart" value={o.weekStart} />
+                    <button type="submit" class="text-xs text-cyan hover:underline">
+                      back to automatic
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        <form method="post" class="grid gap-4 sm:grid-cols-[1fr_1fr_8rem_auto] sm:items-end" novalidate>
+          <input type="hidden" name="intent" value="deal" />
+          {dealError && (
+            <p class="text-xs text-danger sm:col-span-4">{dealError}</p>
+          )}
+          <label class="block">
+            <span class={labelClass}>week</span>
+            <select
+              name="weekStart"
+              class:list={[inputClass(Boolean(dealErrors.weekStart)), "mt-1"]}
+            >
+              {dealWeeks.map((week) => (
+                <option
+                  value={week.weekStart}
+                  selected={dealValues.weekStart === week.weekStart}
+                >
+                  {week.label}
+                </option>
+              ))}
+            </select>
+            {dealErrors.weekStart && (
+              <span class="mt-1 block text-xs text-danger">
+                {dealErrors.weekStart}
+              </span>
+            )}
+          </label>
+          <label class="block">
+            <span class={labelClass}>item</span>
+            <select
+              name="itemId"
+              class:list={[inputClass(Boolean(dealErrors.itemId)), "mt-1"]}
+            >
+              {dealItems.map((item) => (
+                <option value={item.id} selected={dealValues.itemId === item.id}>
+                  {item.name} ({item.price})
+                </option>
+              ))}
+            </select>
+            {dealErrors.itemId && (
+              <span class="mt-1 block text-xs text-danger">
+                {dealErrors.itemId}
+              </span>
+            )}
+          </label>
+          <AdminField
+            label="% off"
+            name="discountPercent"
+            type="number"
+            value={dealValues.discountPercent}
+            error={dealErrors.discountPercent}
+          />
+          <button type="submit" class={btnPrimary}>set deal</button>
+        </form>
+      </div>
+    </TerminalWindow>
   </section>
 </AdminLayout>

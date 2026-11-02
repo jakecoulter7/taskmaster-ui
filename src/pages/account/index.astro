@@ -88,6 +88,9 @@ const walletView = season
     })
   : undefined;
 const seasonQueries = await Astro.locals.getQueries(season?.id);
+const shellPrompt = season
+  ? seasonQueries.getLoadout(player.playerId).shellPrompt
+  : undefined;
 const pull =
   season && coinOutcome === "opened" && Number.isInteger(pullId)
     ? seasonQueries.getCratePull(pullId, player.playerId)
@@ -131,6 +134,14 @@ const avatarPreview = {
           <h1 class="mt-1 text-3xl font-extrabold tracking-tight text-ink">
             {player.playerName}
           </h1>
+          {
+            shellPrompt && (
+              <p class="mt-1 truncate text-xs text-acid">
+                {shellPrompt}
+                <span class="caret" aria-hidden="true"></span>
+              </p>
+            )
+          }
           <p class="mt-1 text-xs text-ink-faint">{player.email}</p>
         </div>
       </div>

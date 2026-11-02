@@ -1,8 +1,9 @@
 ---
 // One shop listing: the item, its price and, for the viewer, a buy button
 // (a plain POST to `/account/shop/<id>`) or why they can't buy it.
-// Limited-time stock says when it leaves; limited stock, how many are left.
-import type { ShopListing } from "../types";
+// Limited-time stock says when it leaves; limited stock, how many are left;
+// this week's deal, how much is off.
+import type { ShopListing, ShopTab } from "../types";
 import ShopItemArt from "./ShopItemArt.astro";
 import CoinPrice from "./CoinPrice.astro";
 import RarityBadge from "./RarityBadge.astro";
@@ -15,11 +16,20 @@ import { withBase } from "../lib/url";
 
 interface Props {
   listing: ShopListing;
+  /** Prefix of the card's anchor id (`<prefix>-<item id>`). */
+  idPrefix?: string;
+  /** The tab it's shown on, so buying lands back there. */
+  tab?: ShopTab;
   class?: string;
 }
 
-const { listing, class: className } = Astro.props;
-const { item, price, owned, charges, remaining, blocked } = listing;
+const {
+  listing,
+  idPrefix = "item",
+  tab,
+  class: className,
+} = Astro.props;
+const { item, price, owned, charges, remaining, deal, blocked } = listing;
 const action = withBase(`/account/shop/${encodeURIComponent(item.id)}`);
 const loginHref = withBase(
   `/login?${new URLSearchParams({ next: `/account/shop/${item.id}` })}`,
@@ -58,7 +68,7 @@ const status =
 ---
 
 <article
-  id={`item-${item.id}`}
+  id={`${idPrefix}-${item.id}`}
   class:list={[
     "flex min-w-0 scroll-mt-24 flex-col gap-3 rounded-lg border bg-term-panel/60 p-4 transition-colors",
     owned ? "border-acid-dim" : "border-grid hover:border-ink-faint",
@@ -83,13 +93,24 @@ const status =
               {exclusiveLabel}
             </span>
           ) : (
-            <CoinPrice price={price} listPrice={item.price} class="text-sm" />
+            <CoinPrice
+              price={price}
+              listPrice={deal?.fullPrice ?? item.price}
+              class="text-sm"
+            />
           )
         }
         {rarity && <RarityBadge rarity={rarity} />}
       </div>
     </div>
   </div>
+  {
+    deal && (
+      <p class="text-[11px] font-bold uppercase tracking-[0.15em] text-magenta">
+        <span aria-hidden="true">% </span>deal of the week · {deal.percent}% off
+      </p>
+    )
+  }
   {
     item.availableUntil && (
       <p class="flex flex-wrap items-center gap-x-2 text-[11px] text-amber">
@@ -142,6 +163,7 @@ const status =
         </span>
       ) : (
         <form method="post" action={action}>
+          {tab && <input type="hidden" name="tab" value={tab} />}
           <button type="submit" class={btnPrimary}>
             buy<span class="sr-only"> {item.name}</span>
           </button>

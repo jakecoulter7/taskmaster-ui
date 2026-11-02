@@ -7,26 +7,137 @@ import type {
   SkillEarnSource,
   SkillOutcome,
   SkillPath,
+  SkillNode,
   SkillPerk,
   SkillPerks,
 } from "../types";
 import { POWER_UP_INFO } from "../data/coins";
 
-/** Each pathway accent's text, border and fill utilities. */
+/** Each pathway accent's text, border, fill and SVG stroke utilities. */
 export const SKILL_ACCENT_CLASS: Record<
   SkillPath["accent"],
-  { text: string; border: string; fill: string }
+  { text: string; border: string; fill: string; solid: string; stroke: string }
 > = {
-  acid: { text: "text-acid", border: "border-acid/50", fill: "bg-acid/10" },
-  amber: { text: "text-amber", border: "border-amber/50", fill: "bg-amber/10" },
+  acid: {
+    text: "text-acid",
+    border: "border-acid/50",
+    fill: "bg-acid/10",
+    solid: "border-acid bg-acid/25",
+    stroke: "stroke-acid",
+  },
+  amber: {
+    text: "text-amber",
+    border: "border-amber/50",
+    fill: "bg-amber/10",
+    solid: "border-amber bg-amber/25",
+    stroke: "stroke-amber",
+  },
   magenta: {
     text: "text-magenta",
     border: "border-magenta/50",
     fill: "bg-magenta/10",
+    solid: "border-magenta bg-magenta/25",
+    stroke: "stroke-magenta",
   },
-  cyan: { text: "text-cyan", border: "border-cyan/50", fill: "bg-cyan/10" },
-  gold: { text: "text-gold", border: "border-gold/50", fill: "bg-gold/10" },
+  cyan: {
+    text: "text-cyan",
+    border: "border-cyan/50",
+    fill: "bg-cyan/10",
+    solid: "border-cyan bg-cyan/25",
+    stroke: "stroke-cyan",
+  },
+  gold: {
+    text: "text-gold",
+    border: "border-gold/50",
+    fill: "bg-gold/10",
+    solid: "border-gold bg-gold/25",
+    stroke: "stroke-gold",
+  },
 };
+
+/** A node's place in its tree, as its card labels it. */
+export function skillNodeRole(node: SkillNode): string {
+  if (node.requires.length === 0) return "root";
+  if (node.requires.length > 1) return "capstone";
+  return ({ 2: "branch", 3: "spur", 4: "tip" } as const)[
+    node.tier as 2 | 3 | 4
+  ];
+}
+
+/** Where a node is drawn: percentages of the tree's box (x across, y down). */
+export interface SkillNodePoint {
+  x: number;
+  y: number;
+}
+
+export interface SkillTreeLayout {
+  points: Record<string, SkillNodePoint>;
+  /** One per prerequisite, parent to child. */
+  edges: { from: string; to: string }[];
+  rows: number;
+}
+
+/** Space between siblings, a lone child's outward lean, and the min gap. */
+const FAN = 2;
+const LEAN = 0.5;
+const MIN_GAP = 1;
+
+/**
+ * Lays a pathway out as a tree growing up from its root: one row per tier,
+ * each node above the middle of its prerequisites. Siblings fan out, a lone
+ * child leans away from the centre, and no two nodes in a row overlap.
+ */
+export function layoutSkillTree(nodes: readonly SkillNode[]): SkillTreeLayout {
+  const tiers = [...new Set(nodes.map((n) => n.tier))].sort((a, b) => a - b);
+  const xs = new Map<string, number>();
+  for (const tier of tiers) {
+    const siblings = new Map<string, SkillNode[]>();
+    for (const node of nodes.filter((n) => n.tier === tier)) {
+      const key = node.requires.join(" ");
+      siblings.set(key, [...(siblings.get(key) ?? []), node]);
+    }
+    const row: { id: string; x: number }[] = [];
+    for (const group of siblings.values()) {
+      const parents = group[0].requires.flatMap((id) => xs.get(id) ?? []);
+      const mean = parents.length
+        ? parents.reduce((sum, x) => sum + x, 0) / parents.length
+        : 0;
+      const base =
+        parents.length === 1 && group.length === 1
+          ? mean + Math.sign(mean) * LEAN
+          : mean;
+      group.forEach((node, i) =>
+        row.push({ id: node.id, x: base + (i - (group.length - 1) / 2) * FAN }),
+      );
+    }
+    row.sort((a, b) => a.x - b.x);
+    row.forEach((node, i) => {
+      if (i > 0) node.x = Math.max(node.x, row[i - 1].x + MIN_GAP);
+      xs.set(node.id, node.x);
+    });
+  }
+  const all = [...xs.values()];
+  const min = Math.min(...all);
+  const span = Math.max(...all) - min;
+  const rows = tiers.length;
+  const points: Record<string, SkillNodePoint> = {};
+  for (const node of nodes) {
+    const row = tiers.indexOf(node.tier);
+    points[node.id] = {
+      x: span ? ((xs.get(node.id)! - min) / span) * 100 : 50,
+      y: rows > 1 ? ((rows - 1 - row) / (rows - 1)) * 100 : 50,
+    };
+  }
+  return {
+    points,
+    edges: nodes.flatMap((node) =>
+      node.requires
+        .filter((id) => id in points)
+        .map((from) => ({ from, to: node.id })),
+    ),
+    rows,
+  };
+}
 
 /** What a skill node says instead of its unlock button. */
 export const SKILL_BLOCK_LABEL: Record<SkillBlock, string> = {

@@ -8,7 +8,20 @@ import RecentPulls from "../components/RecentPulls.astro";
 import CoinAmount from "../components/CoinAmount.astro";
 import Notice from "../components/admin/Notice.astro";
 import { btnGhost } from "../components/admin/styles";
-import { COIN_OUTCOME_NOTICE, parseCoinOutcome } from "../lib/coin-ui";
+import ShopTabs from "../components/ShopTabs.astro";
+import BundleCard from "../components/BundleCard.astro";
+import RaffleBox from "../components/RaffleBox.astro";
+import RenameBox from "../components/RenameBox.astro";
+import GiftWrapBox from "../components/GiftWrapBox.astro";
+import type { ShopCategory, ShopTab } from "../types";
+import {
+  COIN_OUTCOME_NOTICE,
+  SHOP_TAB_INFO,
+  parseCoinOutcome,
+  parseShopTab,
+  timeLeftLabel,
+} from "../lib/coin-ui";
+import { ukDateFormat } from "../lib/time";
 import { withBase } from "../lib/url";
 
 const [queries, viewer] = await Promise.all([
@@ -26,6 +39,11 @@ const {
   getCrateViews,
   getRecentPulls,
   getCratePull,
+  getShopDeal,
+  getBundleViews,
+  getRafflePanel,
+  getRenamePanel,
+  getGiftWrapPanel,
 } = queries;
 
 // Wallets are per season: only this season's players shop here.
@@ -48,6 +66,52 @@ const pull =
     ? getCratePull(pullId, playerId)
     : undefined;
 const notice = outcome && !pull ? COIN_OUTCOME_NOTICE[outcome] : undefined;
+
+// The shop is split into tabs (`?tab=`), each its own server-rendered page.
+const shopper = { playerId };
+const deal = getShopDeal(shopper);
+const bundles = getBundleViews(shopper);
+const sectionOf = (category: ShopCategory) =>
+  sections.find((section) => section.category === category)?.listings ?? [];
+const powerUps = sectionOf("power_up");
+const cosmetics = sectionOf("cosmetic");
+const pets = sectionOf("pet");
+const avatars = sectionOf("avatar");
+const featuredCount = (deal ? 1 : 0) + bundles.length + limited.length;
+const tabs: { tab: ShopTab; count?: number }[] = [
+  { tab: "featured", count: featuredCount },
+  ...(features.shop_eggs
+    ? [{ tab: "eggs" as const, count: crates.length }]
+    : []),
+  { tab: "power-ups", count: powerUps.length },
+  { tab: "cosmetics", count: cosmetics.length },
+  { tab: "pets", count: pets.length + avatars.length },
+  { tab: "extras" },
+];
+// Land on the featured tab when it has anything, else the first that does.
+const requested = parseShopTab(Astro.url.searchParams.get("tab"));
+const active: ShopTab =
+  requested && tabs.some((t) => t.tab === requested)
+    ? requested
+    : featuredCount > 0
+      ? "featured"
+      : (tabs.find((t) => (t.count ?? 0) > 0)?.tab ?? "extras");
+// The extras' panels are only worked out on their tab.
+const onExtras = active === "extras";
+const raffle =
+  onExtras && features.shop_raffle ? getRafflePanel(shopper) : undefined;
+const rename = onExtras ? getRenamePanel(shopper) : undefined;
+const giftWrap =
+  onExtras && features.shop_gift_wrap ? getGiftWrapPanel(shopper) : undefined;
+const dealEndsFmt = ukDateFormat({
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const sectionHeading = "mt-1 text-2xl font-extrabold tracking-tight text-ink";
+const grid = "mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3";
 ---
 
 <Layout
@@ -129,97 +193,207 @@ const notice = outcome && !pull ? COIN_OUTCOME_NOTICE[outcome] : undefined;
 
     {pull && <CrateReveal pull={pull} class="mt-8" />}
 
-    {
-      // Behind the mystery eggs feature flag (/admin/site#flags).
-      features.shop_eggs && (
-        <section
-          id="crates"
-          aria-labelledby="crates-heading"
-          class="mt-12 scroll-mt-24"
-        >
-          <p class="prompt text-[11px] text-ink-faint">ls ./eggs --odds</p>
-          <h2
-            id="crates-heading"
-            class="mt-1 text-2xl font-extrabold tracking-tight text-ink"
-          >
-            Mystery eggs
-          </h2>
-          <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
-            Crack one open for a random pet, avatar or cosmetic you don't own
-            yet, or, rarely, a power-up you haven't had this season. Rarity
-            follows the shop price: Common up to 7, Rare 8–14, Epic 15–19,
-            Legendary 20+. Seasonal eggs only hatch their own exclusives, and
-            only while they're on sale. The odds below are exact.
-          </p>
-          <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {crates.map((view) => (
-              <CrateCard view={view} personal={playerId !== undefined} />
-            ))}
+    <ShopTabs
+      id="shop-tabs"
+      tabs={tabs}
+      active={active}
+      class="mt-10 scroll-mt-24"
+    />
+
+    <section aria-labelledby="shop-tab-heading" class="mt-8">
+      <p class="prompt text-[11px] text-ink-faint">
+        {SHOP_TAB_INFO[active].command}
+      </p>
+      <h2 id="shop-tab-heading" class="sr-only">
+        {SHOP_TAB_INFO[active].label}
+      </h2>
+
+      {
+        active === "featured" && (
+          <div class="space-y-12">
+            {featuredCount === 0 && (
+              <TerminalWindow title="~/shop/featured" class="mt-4">
+                <p class="text-sm text-ink-dim">
+                  <span class="text-amber">&gt;</span> Nothing featured right
+                  now. Browse the other tabs, or check back on Monday for a
+                  new deal.
+                </p>
+              </TerminalWindow>
+            )}
+            {deal && (
+              <div id="deal" class="scroll-mt-24">
+                <h3 class={sectionHeading}>
+                  <span class="text-magenta">%</span> Deal of the week
+                </h3>
+                <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+                  {deal.discountPercent}% off until{" "}
+                  <time datetime={deal.endsAt}>
+                    {dealEndsFmt.format(new Date(deal.endsAt))}
+                  </time>{" "}
+                  ({timeLeftLabel(deal.endsAt)}).{" "}
+                  {deal.automatic
+                    ? "A new deal rolls round every Monday."
+                    : "Hand-picked by the Taskmaster."}
+                </p>
+                <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <ShopItemCard
+                    listing={deal.listing}
+                    idPrefix="deal"
+                    tab="featured"
+                    class="border-magenta/50"
+                  />
+                </div>
+              </div>
+            )}
+            {bundles.length > 0 && (
+              <div id="bundles" class="scroll-mt-24">
+                <h3 class={sectionHeading}>Bundles</h3>
+                <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+                  Several items for one price. You can't buy a bundle with
+                  anything in it you've already had.
+                </p>
+                <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  {bundles.map((view) => (
+                    <BundleCard view={view} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {limited.length > 0 && (
+              <div>
+                <h3 class={sectionHeading}>Limited time</h3>
+                <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+                  On the shelves for a short while only. Once they're gone,
+                  they're gone.
+                </p>
+                <div class={grid}>
+                  {limited.map((listing) => (
+                    <ShopItemCard listing={listing} tab="featured" />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          {recentPulls.length > 0 && (
-            <div class="mt-6 rounded-lg border border-grid bg-term-panel/40 px-4 py-3">
-              <h3 class="text-[10px] font-bold uppercase tracking-[0.25em] text-ink-faint">
-                recently hatched
-              </h3>
-              <RecentPulls pulls={recentPulls} class="mt-1" />
+        )
+      }
+
+      {
+        active === "eggs" && features.shop_eggs && (
+          <div id="crates" class="scroll-mt-24">
+            <h3 class={sectionHeading}>Mystery eggs</h3>
+            <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
+              Crack one open for a random pet, avatar or cosmetic you don't own
+              yet, or, rarely, a power-up you haven't had this season. Rarity
+              follows the shop price: Common up to 7, Rare 8–14, Epic 15–19,
+              Legendary 20+. Seasonal eggs only hatch their own exclusives, and
+              only while they're on sale. The odds below are exact.
+            </p>
+            <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {crates.map((view) => (
+                <CrateCard view={view} personal={playerId !== undefined} />
+              ))}
             </div>
-          )}
-        </section>
-      )
-    }
-
-    {
-      limited.length > 0 && (
-        <section aria-labelledby="shop-limited" class="mt-12">
-          <p class="prompt text-[11px] text-ink-faint">
-            ls ./limited --sort leaving
-          </p>
-          <h2
-            id="shop-limited"
-            class="mt-1 text-2xl font-extrabold tracking-tight text-ink"
-          >
-            Limited time
-          </h2>
-          <p class="mt-1 max-w-2xl text-xs leading-relaxed text-ink-dim">
-            On the shelves for a short while only. Once they're gone, they're
-            gone.
-          </p>
-          <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {limited.map((listing) => (
-              <ShopItemCard listing={listing} />
-            ))}
+            {recentPulls.length > 0 && (
+              <div class="mt-6 rounded-lg border border-grid bg-term-panel/40 px-4 py-3">
+                <h4 class="text-[10px] font-bold uppercase tracking-[0.25em] text-ink-faint">
+                  recently hatched
+                </h4>
+                <RecentPulls pulls={recentPulls} class="mt-1" />
+              </div>
+            )}
           </div>
-        </section>
-      )
-    }
+        )
+      }
 
-    {
-      sections.length === 0 && limited.length === 0 ? (
-        <TerminalWindow title="~/shop" class="mt-10">
-          <p class="text-sm text-ink-dim">
-            <span class="text-amber">&gt;</span> The shelves are empty. The
-            Taskmaster is restocking; check back soon.
-          </p>
-        </TerminalWindow>
-      ) : (
-        sections.map((section) => (
-          <section aria-labelledby={`shop-${section.category}`} class="mt-12">
-            <p class="prompt text-[11px] text-ink-faint">{section.command}</p>
-            <h2
-              id={`shop-${section.category}`}
-              class="mt-1 text-2xl font-extrabold tracking-tight text-ink"
-            >
-              {section.label}
-            </h2>
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {section.listings.map((listing) => (
+      {
+        active === "power-ups" && (
+          <div>
+            <p class="max-w-2xl text-xs leading-relaxed text-ink-dim">
+              Each power-up is one charge, bought once a season. Use one active
+              power-up a week from your wallet; passive ones work by
+              themselves.{" "}
+              <a
+                href={withBase("/rules#clim-coin")}
+                class="text-cyan hover:underline"
+              >
+                How they work →
+              </a>
+            </p>
+            {powerUps.length > 0 ? (
+              <div class={grid}>
+                {powerUps.map((listing) => (
+                  <ShopItemCard listing={listing} />
+                ))}
+              </div>
+            ) : (
+              <p class="mt-4 text-sm text-ink-dim">
+                <span class="text-amber">&gt;</span> No power-ups on the shelves
+                right now.
+              </p>
+            )}
+          </div>
+        )
+      }
+
+      {
+        active === "cosmetics" &&
+          (cosmetics.length > 0 ? (
+            <div class={grid}>
+              {cosmetics.map((listing) => (
                 <ShopItemCard listing={listing} />
               ))}
             </div>
-          </section>
-        ))
-      )
-    }
+          ) : (
+            <p class="mt-4 text-sm text-ink-dim">
+              <span class="text-amber">&gt;</span> No flair on the shelves right
+              now.
+            </p>
+          ))
+      }
+
+      {
+        active === "pets" && (
+          <div class="space-y-12">
+            {pets.length === 0 && avatars.length === 0 && (
+              <p class="mt-4 text-sm text-ink-dim">
+                <span class="text-amber">&gt;</span> No pets or avatars on the
+                shelves right now.
+              </p>
+            )}
+            {pets.length > 0 && (
+              <div>
+                <h3 class={sectionHeading}>Pets</h3>
+                <div class={grid}>
+                  {pets.map((listing) => (
+                    <ShopItemCard listing={listing} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {avatars.length > 0 && (
+              <div>
+                <h3 class={sectionHeading}>Avatars</h3>
+                <div class={grid}>
+                  {avatars.map((listing) => (
+                    <ShopItemCard listing={listing} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      {
+        active === "extras" && (
+          <div class="mt-4 space-y-8">
+            {raffle && <RaffleBox panel={raffle} />}
+            {rename && <RenameBox panel={rename} />}
+            {giftWrap && <GiftWrapBox panel={giftWrap} />}
+          </div>
+        )
+      }
+    </section>
 
     <div class="mt-14 flex flex-wrap gap-3">
       <a href={withBase("/rules#clim-coin")} class={btnGhost}>

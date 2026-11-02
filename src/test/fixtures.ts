@@ -226,6 +226,10 @@ export function competitionData(
       achievements: false,
       marketplace: false,
       bounties: false,
+      shop_deals: false,
+      shop_bundles: false,
+      shop_raffle: false,
+      shop_gift_wrap: false,
     },
     ...overrides,
   };
@@ -251,6 +255,12 @@ export function coinData(overrides: Partial<ClimCoinData> = {}): ClimCoinData {
     miniTaskCompletions: [],
     market: { listings: [], offers: [], sales: [] },
     bounties: { bounties: [], claims: [] },
+    raffle: { tickets: [], draws: [] },
+    renameTokens: [],
+    wrappedGifts: [],
+    bundles: [],
+    bundlePurchases: [],
+    dealOverrides: [],
     ...overrides,
   };
 }

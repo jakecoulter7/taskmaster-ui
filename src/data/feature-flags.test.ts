@@ -19,6 +19,10 @@ describe("mapFeatureFlags", () => {
       achievements: false,
       marketplace: false,
       bounties: false,
+      shop_deals: false,
+      shop_bundles: false,
+      shop_raffle: false,
+      shop_gift_wrap: false,
     });
   });
 
@@ -33,6 +37,10 @@ describe("mapFeatureFlags", () => {
       achievements: false,
       marketplace: false,
       bounties: false,
+      shop_deals: false,
+      shop_bundles: false,
+      shop_raffle: false,
+      shop_gift_wrap: false,
     });
     expect(
       mapFeatureFlags([row("shop_eggs", false), row("storm_mode", true)]),
@@ -44,6 +52,10 @@ describe("mapFeatureFlags", () => {
       achievements: false,
       marketplace: false,
       bounties: false,
+      shop_deals: false,
+      shop_bundles: false,
+      shop_raffle: false,
+      shop_gift_wrap: false,
     });
   });
 });
@@ -58,6 +70,10 @@ describe("featureFlagViews", () => {
       expect.objectContaining({ key: "achievements", enabled: false }),
       expect.objectContaining({ key: "marketplace", enabled: false }),
       expect.objectContaining({ key: "bounties", enabled: false }),
+      expect.objectContaining({ key: "shop_deals", enabled: false }),
+      expect.objectContaining({ key: "shop_bundles", enabled: false }),
+      expect.objectContaining({ key: "shop_raffle", enabled: false }),
+      expect.objectContaining({ key: "shop_gift_wrap", enabled: false }),
     ]);
     expect(featureFlagViews([])[0].changedBy).toBeUndefined();
     expect(featureFlagViews([row("shop_eggs", true)])[0]).toMatchObject({

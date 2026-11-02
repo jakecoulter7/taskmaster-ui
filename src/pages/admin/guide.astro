@@ -567,8 +567,8 @@ const link = "text-cyan hover:underline";
               class={link}>/skills</a
             >) are behind the{" "}
             <span class="text-ink">skill trees</span> flag. Players commit to one
-            pathway a season and unlock its four skills with Clim Coin for coin perks,
-            a title and a name colour; it never changes points. There's nothing to
+            pathway a season and unlock its eight skills with Clim Coin for coin perks,
+            titles and a name colour; it never changes points. There's nothing to
             manage: the pathways live in code (<code class="text-ink"
               >src/data/skill-trees.ts</code
             >), their rewards are listed in the shop editor as{" "}
@@ -595,12 +595,33 @@ const link = "text-cyan hover:underline";
             and gifts and marketplace resales don't count.
           </li>
           <li>
-            <span class="text-cyan" aria-hidden="true">&gt;</span> Shield, Mirror
-            and Insurance are passive: players never use them, so they don't appear
-            in the judge tab. A Sabotage on a shielded player still shows as −5 until
-            the week has results; then it's dropped (Shield) or moved onto the saboteur
-            (Mirror). Revoking that Sabotage gives the defence back. Players can also
-            gift each other up to 5 coins a week; gifts show in both wallets' history.
+            <span class="text-cyan" aria-hidden="true">&gt;</span> Shield, Mirror,
+            Insurance, Bounty Badge and Underdog are passive: players never use them,
+            so they don't appear in the judge tab. A Sabotage or Heist on a shielded
+            player still shows as normal until the week has results; then it's dropped
+            (Shield) or turned onto its user (Mirror). Revoking it gives the defence
+            back. Revoking a Freeze lets its target use a power-up again; a Copycat
+            shows in the judge tab with what it copied. Players can also gift each
+            other up to 5 coins a week; gifts show in both wallets' history.
+          </li>
+          <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span> Shell prompts
+            and avatar frames are cosmetics like titles: pick the kind when you add
+            one. A shell prompt's value is its text (<code class="text-ink"
+              >{"{name}"}</code
+            > becomes the player's handle) and shows on their profile and entries;
+            an avatar frame's value is one of the preset frames.
+          </li>
+          <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span> Below the shop
+            list: <a href={withBase("/admin/site#bundles")} class={link}>bundles</a>
+            (several items for one price; players who've had any of them can't buy
+            it) and the <a href={withBase("/admin/site#deal")} class={link}
+              >deal of the week</a
+            > (an automatic 30% off pick every Monday, unless you choose the item and
+            discount for a week). Each has its own flag, as do the weekly raffle and
+            gift wrap on the shop's extras tab. The raffle draws itself at the live
+            week's deadline; nothing to do. Rename tokens are always on.
           </li>
           <li>
             <span class="text-cyan" aria-hidden="true">&gt;</span> Gift, grant or

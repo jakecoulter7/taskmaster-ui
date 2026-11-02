@@ -889,6 +889,85 @@ a[data-me-row].is-me {
   }
 }
 
+/* Clim Coin avatar frames (see AVATAR_FRAME_INFO), drawn round the avatar
+   image with an outline so they never change its size. */
+.avatar-frame-neon {
+  outline: 2px solid var(--color-cyan);
+  outline-offset: 1px;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--color-cyan) 60%, transparent);
+}
+.avatar-frame-gold {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 1px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--color-gold) 25%, transparent),
+    0 0 12px color-mix(in srgb, var(--color-gold) 45%, transparent);
+}
+.avatar-frame-ascii {
+  outline: 2px dashed var(--color-acid);
+  outline-offset: 2px;
+}
+.avatar-frame-pumpkin {
+  outline: 2px solid var(--color-pumpkin);
+  outline-offset: 1px;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--color-pumpkin) 20%, transparent),
+    0 0 10px color-mix(in srgb, var(--color-pumpkin) 45%, transparent);
+}
+.avatar-frame-glitch {
+  outline: 1px solid var(--color-ink);
+  outline-offset: 1px;
+  box-shadow:
+    2px 0 0 var(--color-magenta),
+    -2px 0 0 var(--color-cyan);
+  animation: avatar-frame-glitch 3s steps(1) infinite;
+}
+@keyframes avatar-frame-glitch {
+  0%,
+  86%,
+  100% {
+    box-shadow:
+      2px 0 0 var(--color-magenta),
+      -2px 0 0 var(--color-cyan);
+  }
+  88% {
+    box-shadow:
+      -4px 0 0 var(--color-magenta),
+      4px 0 0 var(--color-cyan);
+  }
+  92% {
+    box-shadow:
+      4px 1px 0 var(--color-magenta),
+      -4px -1px 0 var(--color-cyan);
+  }
+}
+.avatar-frame-rainbow {
+  outline: 2px solid var(--color-acid);
+  outline-offset: 1px;
+  animation: avatar-frame-rainbow 6s linear infinite;
+}
+@keyframes avatar-frame-rainbow {
+  0%,
+  100% {
+    outline-color: var(--color-acid);
+  }
+  25% {
+    outline-color: var(--color-cyan);
+  }
+  50% {
+    outline-color: var(--color-magenta);
+  }
+  75% {
+    outline-color: var(--color-amber);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .avatar-frame-glitch,
+  .avatar-frame-rainbow {
+    animation: none;
+  }
+}
+
 /* Clim Coin egg (crate) reveal. `data-phase` steps through wobble → crack
    → open, set by the reveal's scripts; without JS (or under reduced motion)
    it's never set, so the egg stays hidden and the prize simply shows. */

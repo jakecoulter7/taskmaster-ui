@@ -30,6 +30,7 @@ export const ACTIVITY_KINDS: Record<ActivityKind, string> = {
   wish: "wishes",
   market: "marketplace",
   bounty: "bounties",
+  "shop-extra": "shop extras",
 };
 
 export const isActivityKind = (value: string): value is ActivityKind =>
@@ -109,7 +110,34 @@ export function createActivityQueries(data: CompetitionData) {
       ...coins.itemGifts.map((g) => g.purchaseId),
       ...coins.skillUnlocks.flatMap((u) => u.purchaseId ?? []),
       ...coins.market.sales.map((sale) => sale.buyerPurchaseId),
+      ...coins.wrappedGifts.map((g) => g.purchaseId),
+      ...coins.purchases.flatMap((p) =>
+        p.bundlePurchaseId === undefined ? [] : [p.id],
+      ),
     ]);
+    const bundleName = new Map(coins.bundles.map((b) => [b.id, b.name]));
+    // Raffle tickets, one line per player per week (bought together).
+    const tickets = new Map<
+      string,
+      {
+        playerId: string;
+        taskId: string;
+        count: number;
+        price: number;
+        at: string;
+      }
+    >();
+    for (const t of coins.raffle.tickets) {
+      const key = `${t.taskId}:${t.playerId}`;
+      const row = tickets.get(key);
+      tickets.set(key, {
+        playerId: t.playerId,
+        taskId: t.taskId,
+        count: (row?.count ?? 0) + 1,
+        price: (row?.price ?? 0) + t.price,
+        at: row && instant(row.at) > instant(t.at) ? row.at : t.at,
+      });
+    }
     const miniTasks = new Map(coins.miniTasks.map((t) => [t.id, t]));
     return [
       ...coins.adjustments.map(
@@ -264,9 +292,104 @@ export function createActivityQueries(data: CompetitionData) {
             ...(u.targetPlayerId ? [u.targetPlayerId] : []),
           ],
           summary: `${nameOf(u.playerId)} used ${POWER_UP_INFO[u.effect].label}${
-            u.targetPlayerId ? ` on ${nameOf(u.targetPlayerId)}` : ""
-          } · ${weekLabel(u.taskId)}`,
+            u.copiedEffect ? ` (as ${POWER_UP_INFO[u.copiedEffect].label})` : ""
+          }${u.targetPlayerId ? ` on ${nameOf(u.targetPlayerId)}` : ""} · ${weekLabel(
+            u.taskId,
+          )}`,
           href: weekHref(u.taskId, "judge"),
+        }),
+      ),
+      ...coins.bundlePurchases.map(
+        (b): ActivityEntry => ({
+          id: `bundle:${b.id}`,
+          kind: "shop-extra",
+          at: b.at,
+          actor: nameOf(b.playerId),
+          byAdmin: false,
+          subjectIds: [b.playerId],
+          summary: `${nameOf(b.playerId)} bought the ${
+            bundleName.get(b.bundleId) ?? b.bundleId
+          } bundle`,
+          coins: -b.price,
+          href: playerHref(b.playerId),
+        }),
+      ),
+      ...coins.wrappedGifts.map(
+        (g): ActivityEntry => ({
+          id: `gift-wrap:${g.id}`,
+          kind: "shop-extra",
+          at: g.at,
+          actor: nameOf(g.fromPlayerId),
+          byAdmin: false,
+          subjectIds: [g.fromPlayerId, g.toPlayerId],
+          summary: `${nameOf(g.fromPlayerId)} gift-wrapped ${itemOf(
+            g.itemId,
+          )} for ${nameOf(g.toPlayerId)}`,
+          ...((g.anonymous || g.message) && {
+            detail: [
+              ...(g.anonymous ? ["anonymous"] : []),
+              ...(g.message ? [`"${g.message}"`] : []),
+            ].join(" · "),
+          }),
+          coins: -(g.price + g.fee),
+          href: playerHref(g.fromPlayerId),
+        }),
+      ),
+      ...coins.renameTokens.flatMap((t): ActivityEntry[] => [
+        {
+          id: `rename-token:${t.id}`,
+          kind: "shop-extra",
+          at: t.at,
+          actor: nameOf(t.playerId),
+          byAdmin: false,
+          subjectIds: [t.playerId],
+          summary: `${nameOf(t.playerId)} bought a rename token`,
+          coins: -t.price,
+          href: playerHref(t.playerId),
+        },
+        ...(t.usedAt && t.itemId && t.name
+          ? [
+              {
+                id: `rename:${t.id}`,
+                kind: "shop-extra" as const,
+                at: t.usedAt,
+                actor: nameOf(t.playerId),
+                byAdmin: false,
+                subjectIds: [t.playerId],
+                summary: `${nameOf(t.playerId)} renamed their ${itemOf(t.itemId)}`,
+                detail: `"${t.name}"`,
+                href: playerHref(t.playerId),
+              },
+            ]
+          : []),
+      ]),
+      ...[...tickets.values()].map(
+        (t): ActivityEntry => ({
+          id: `raffle:${t.taskId}:${t.playerId}`,
+          kind: "shop-extra",
+          at: t.at,
+          actor: nameOf(t.playerId),
+          byAdmin: false,
+          subjectIds: [t.playerId],
+          summary: `${nameOf(t.playerId)} bought ${t.count} raffle ticket${
+            t.count === 1 ? "" : "s"
+          } · ${weekLabel(t.taskId)}`,
+          coins: -t.price,
+          href: playerHref(t.playerId),
+        }),
+      ),
+      ...coins.raffle.draws.map(
+        (d): ActivityEntry => ({
+          id: `raffle-draw:${d.taskId}`,
+          kind: "shop-extra",
+          at: d.at,
+          actor: "the raffle",
+          byAdmin: false,
+          subjectIds: [d.winnerId],
+          summary: `${nameOf(d.winnerId)} won the ${weekLabel(d.taskId)} raffle`,
+          detail: `${d.tickets} ticket${d.tickets === 1 ? "" : "s"} in the draw`,
+          coins: d.pot,
+          href: playerHref(d.winnerId),
         }),
       ),
       ...coins.skillUnlocks.map(

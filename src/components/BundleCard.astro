@@ -1,0 +1,88 @@
+---
+// One shop bundle: its items, what they'd cost one by one, and a buy button
+// (a POST to `/account/shop-extras`) or why the viewer can't buy it.
+import type { BundleView } from "../types";
+import ShopItemArt from "./ShopItemArt.astro";
+import CoinPrice from "./CoinPrice.astro";
+import { BUNDLE_BLOCK_LABEL } from "../lib/coin-ui";
+import { btnPrimary } from "./admin/styles";
+import { withBase } from "../lib/url";
+
+interface Props {
+  view: BundleView;
+  class?: string;
+}
+
+const { view, class: className } = Astro.props;
+const { bundle, items, value, blocked } = view;
+const saving = Math.max(0, value - bundle.price);
+const loginHref = withBase(
+  `/login?${new URLSearchParams({ next: "/shop?tab=featured#bundles" })}`,
+);
+---
+
+<article
+  id={`bundle-${bundle.id}`}
+  class:list={[
+    "flex min-w-0 scroll-mt-24 flex-col gap-3 rounded-lg border border-cyan/40 bg-term-panel/60 p-4",
+    className,
+  ]}
+>
+  <div class="flex flex-wrap items-start justify-between gap-2">
+    <div class="min-w-0">
+      <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan">
+        bundle · {items.length} items
+      </p>
+      <h3 class="mt-0.5 text-sm font-extrabold text-ink">{bundle.name}</h3>
+    </div>
+    <div class="text-right">
+      <CoinPrice price={bundle.price} listPrice={value} class="text-sm" />
+      {
+        saving > 0 && (
+          <p class="text-[11px] text-acid">save {saving}</p>
+        )
+      }
+    </div>
+  </div>
+  {
+    bundle.description && (
+      <p class="text-xs leading-relaxed text-ink-dim">{bundle.description}</p>
+    )
+  }
+  <ul class="grid gap-2 sm:grid-cols-2">
+    {
+      items.map((item) => (
+        <li class="flex min-w-0 items-center gap-2 rounded-md border border-grid bg-term-bg/60 p-2">
+          <ShopItemArt item={item} class="h-8 w-8" />
+          <span class="min-w-0 truncate text-xs text-ink">{item.name}</span>
+        </li>
+      ))
+    }
+  </ul>
+  <div class="mt-auto flex flex-wrap items-center justify-end gap-2 pt-1">
+    {
+      blocked === "guest" ? (
+        <a href={loginHref} class="text-xs text-cyan hover:underline">
+          {BUNDLE_BLOCK_LABEL.guest} →
+        </a>
+      ) : blocked ? (
+        <span
+          class:list={[
+            "text-[11px] font-bold uppercase tracking-widest",
+            blocked === "owned" ? "text-acid" : "text-ink-faint",
+          ]}
+        >
+          {BUNDLE_BLOCK_LABEL[blocked]}
+        </span>
+      ) : (
+        <form method="post" action={withBase("/account/shop-extras")}>
+          <input type="hidden" name="intent" value="bundle" />
+          <input type="hidden" name="bundleId" value={bundle.id} />
+          <button type="submit" class={btnPrimary}>
+            buy bundle<span class="sr-only"> {bundle.name}</span>
+          </button>
+        </form>
+      )
+    }
+  </div>
+</article>

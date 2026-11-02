@@ -2,9 +2,24 @@
 // The picture for a shop item: the pixel image for pets and avatars, and a
 // preview for cosmetics and power-ups. Decorative: the item's name is always
 // shown alongside it.
-import type { NameColour, PowerUpKind, ProfileTheme, ShopItem } from "../types";
-import { NAME_COLOURS, PROFILE_THEMES } from "../data/coin-rules";
-import { NAME_COLOUR_CLASS, PROFILE_THEME_INFO } from "../lib/coin-ui";
+import type {
+  AvatarFrame,
+  NameColour,
+  ProfileTheme,
+  ShopItem,
+} from "../types";
+import {
+  AVATAR_FRAMES,
+  NAME_COLOURS,
+  PROFILE_THEMES,
+  renderShellPrompt,
+} from "../data/coin-rules";
+import {
+  AVATAR_FRAME_INFO,
+  NAME_COLOUR_CLASS,
+  POWER_UP_GLYPH,
+  PROFILE_THEME_INFO,
+} from "../lib/coin-ui";
 import { assetUrl } from "../lib/url";
 
 interface Props {
@@ -15,17 +30,6 @@ interface Props {
 
 const { item, class: className = "h-16 w-16" } = Astro.props;
 
-const powerUpGlyph: Record<PowerUpKind, { glyph: string; class: string }> = {
-  double_down: { glyph: "×2", class: "text-cyan" },
-  hint: { glyph: "?", class: "text-acid" },
-  golden_week: { glyph: "★", class: "text-amber" },
-  sabotage: { glyph: "☠", class: "text-danger" },
-  shield: { glyph: "◈", class: "text-cyan" },
-  mirror: { glyph: "⇄", class: "text-magenta" },
-  insurance: { glyph: "✚", class: "text-acid" },
-  wish: { glyph: "✧", class: "text-magenta" },
-};
-
 const value = item.cosmetic?.value;
 const nameColour: NameColour | undefined = NAME_COLOURS.find(
   (c) => item.cosmetic?.kind === "name_colour" && c === value,
@@ -33,6 +37,11 @@ const nameColour: NameColour | undefined = NAME_COLOURS.find(
 const theme: ProfileTheme | undefined = PROFILE_THEMES.find(
   (t) => item.cosmetic?.kind === "theme" && t === value,
 );
+const avatarFrame: AvatarFrame | undefined = AVATAR_FRAMES.find(
+  (f) => item.cosmetic?.kind === "avatar_frame" && f === value,
+);
+const shellPrompt =
+  item.cosmetic?.kind === "shell_prompt" ? item.cosmetic.value : undefined;
 const frame =
   "flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-grid bg-term-bg";
 ---
@@ -59,11 +68,11 @@ const frame =
       class:list={[
         frame,
         "text-2xl font-extrabold",
-        powerUpGlyph[item.powerUp].class,
+        POWER_UP_GLYPH[item.powerUp].class,
         className,
       ]}
     >
-      {powerUpGlyph[item.powerUp].glyph}
+      {POWER_UP_GLYPH[item.powerUp].glyph}
     </span>
   ) : nameColour ? (
     <span
@@ -76,6 +85,28 @@ const frame =
       ]}
     >
       Aa
+    </span>
+  ) : avatarFrame ? (
+    <span aria-hidden="true" class:list={[frame, "p-3", className]}>
+      <span
+        class:list={[
+          "block h-full w-full rounded bg-term-panel-2",
+          AVATAR_FRAME_INFO[avatarFrame].class,
+        ]}
+      ></span>
+    </span>
+  ) : shellPrompt ? (
+    <span
+      aria-hidden="true"
+      class:list={[
+        frame,
+        "px-1 text-center text-[9px] font-bold leading-tight text-acid",
+        className,
+      ]}
+    >
+      <span class="line-clamp-3 [overflow-wrap:anywhere]">
+        {renderShellPrompt(shellPrompt, "you")}
+      </span>
     </span>
   ) : theme ? (
     <span aria-hidden="true" class:list={[frame, "p-2", className]}>

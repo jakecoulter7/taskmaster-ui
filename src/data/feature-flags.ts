@@ -1,6 +1,12 @@
 import type { FeatureFlagKey, FeatureFlags, FeatureFlagView } from "../types";
 import type { featureFlags as featureFlagsTable } from "../db/schema";
 import { timestamptzToIso } from "../lib/time";
+import {
+  DEAL_DISCOUNT_PERCENT,
+  GIFT_WRAP_FEE,
+  RAFFLE_MAX_TICKETS,
+  RAFFLE_TICKET_PRICE,
+} from "./coin-rules";
 
 // Site-wide feature flags. Every flag is off until an admin turns it on in
 // `/admin/site#flags` (a flag with no `feature_flags` row is off), so a new
@@ -44,6 +50,23 @@ export const FEATURE_FLAGS: Record<
     label: "Bounties",
     description:
       "Opens /bounties: players put up 1–50 Clim Coin for a challenge, others claim it and the poster picks a winner (admins can award or cancel any from /admin/market). The reward is held while it's open; bounties lapse after 7 days and the coins go back. Off: the board and its links are hidden and nobody can post, claim or award; open bounties stay put (their coins stay held) until they lapse or it's back on.",
+  },
+  shop_deals: {
+    label: "Deal of the week",
+    description: `Puts one shop item on offer each week (Monday to Monday, UK time): ${DEAL_DISCOUNT_PERCENT}% off an automatic pick, or the item and discount an admin sets in /admin/site#deal. Shown on the shop's featured tab. Off: no deal, and everything sells at full price.`,
+  },
+  shop_bundles: {
+    label: "Bundles",
+    description:
+      "Shows the bundles set up in /admin/shop on the shop's featured tab: several items for one price. A bundle can't be bought by anyone who already has one of its items. Off: bundles are hidden and can't be bought; items already bought in one stay put.",
+  },
+  shop_raffle: {
+    label: "Weekly raffle",
+    description: `Adds the raffle to the shop's extras tab: players buy up to ${RAFFLE_MAX_TICKETS} tickets (${RAFFLE_TICKET_PRICE} coins each) for the live week, and one ticket wins the whole pot when the week's deadline passes. Off: tickets can't be bought; weeks already drawn still pay out.`,
+  },
+  shop_gift_wrap: {
+    label: "Gift wrap",
+    description: `Adds gift wrap to the shop's extras tab: players buy a pet, avatar or cosmetic for someone else in their season (who doesn't have it) for its price plus a ${GIFT_WRAP_FEE}-coin fee, with an optional note and anonymous sender. Off: gift wrap is hidden and can't be used; gifts already sent stay put.`,
   },
 };
 

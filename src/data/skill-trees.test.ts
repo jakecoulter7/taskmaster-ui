@@ -26,7 +26,12 @@ import type {
   SkillPerk,
   SkillUnlock,
 } from "../types";
-import { describePerk, describePerks } from "../lib/skill-ui";
+import {
+  describePerk,
+  describePerks,
+  layoutSkillTree,
+  skillNodeRole,
+} from "../lib/skill-ui";
 import {
   at,
   coinData,
@@ -74,11 +79,12 @@ describe("the skill tree catalogue", () => {
     }
   });
 
-  it("gives every pathway one root, two branches and a capstone", () => {
+  it("gives every pathway a root, two branches with a spur and tip each, and a capstone", () => {
     for (const path of SKILL_PATHS) {
-      expect(path.nodes.map((n) => n.tier)).toEqual([1, 2, 2, 3]);
+      expect(path.nodes.map((n) => n.tier)).toEqual([1, 2, 2, 3, 3, 4, 4, 4]);
       expect(path.nodes[0].requires).toEqual([]);
-      expect(pathCost(path)).toBe(36);
+      expect(path.nodes.filter((n) => n.requires.length > 1)).toHaveLength(1);
+      expect(pathCost(path)).toBe(72);
     }
   });
 
@@ -127,14 +133,28 @@ describe("the skill tree catalogue", () => {
 
   it("is balanced: every pathway's tiers are worth about the same", () => {
     for (const path of SKILL_PATHS) {
-      const [root, perk, cosmetic, capstone] = path.nodes.map((n) =>
-        nodeValue(n.id),
-      );
+      const [
+        root,
+        perk,
+        cosmetic,
+        perkSpur,
+        cosmeticSpur,
+        perkTip,
+        capstone,
+        cosmeticTip,
+      ] = path.nodes.map((n) => nodeValue(n.id));
       expect(root, path.id).toBeGreaterThanOrEqual(14);
       expect(root, path.id).toBeLessThanOrEqual(15);
       expect(perk, path.id).toBeGreaterThanOrEqual(15);
       expect(perk, path.id).toBeLessThanOrEqual(17);
       expect(cosmetic, path.id).toBe(10);
+      for (const spur of [perkSpur, cosmeticSpur]) {
+        expect(spur, path.id).toBeGreaterThanOrEqual(11);
+        expect(spur, path.id).toBeLessThanOrEqual(12);
+      }
+      expect(perkTip, path.id).toBeGreaterThanOrEqual(12);
+      expect(perkTip, path.id).toBeLessThanOrEqual(15);
+      expect(cosmeticTip, path.id).toBe(12);
       expect(capstone, path.id).toBeGreaterThanOrEqual(24);
       expect(capstone, path.id).toBeLessThanOrEqual(25);
       // Every skill pays back well over its price.
@@ -154,7 +174,12 @@ describe("the skill tree catalogue", () => {
       SKILL_REWARD_ITEMS.map((i) => i.id).sort(),
     );
     const seeded = new Map(seedShopItems.map((i) => [i.id, i]));
-    const migration = readFileSync("drizzle/0027_skill_trees.sql", "utf8");
+    const migration = [
+      "drizzle/0027_skill_trees.sql",
+      "drizzle/0035_skill_tree_titles.sql",
+    ]
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n");
     for (const item of SKILL_REWARD_ITEMS) {
       expect(seeded.get(item.id)).toMatchObject({
         skillOnly: true,
@@ -173,17 +198,81 @@ describe("the skill tree catalogue", () => {
   });
 });
 
+describe("the tree map", () => {
+  const storm = SKILL_PATHS.find((p) => p.id === "stormbrewer")!;
+
+  it("grows each pathway up from its root, branches fanning out", () => {
+    const { points, edges, rows } = layoutSkillTree(storm.nodes);
+    expect(rows).toBe(4);
+    const at = (id: string) => points[id];
+    // Root centred at the bottom; the capstone centred at the top.
+    expect(at("storm-static-charge")).toEqual({ x: 50, y: 100 });
+    expect(at("storm-eye-of-the-hurricane")).toEqual({ x: 50, y: 0 });
+    // Each branch leans further out as it climbs.
+    expect(at("storm-lightning-rod").x).toBe(25);
+    expect(at("storm-lightning-rod").y).toBeCloseTo(200 / 3);
+    expect(at("storm-ball-lightning").x).toBe(12.5);
+    expect(at("storm-ball-lightning").y).toBeCloseTo(100 / 3);
+    expect(at("storm-supercell")).toEqual({ x: 0, y: 0 });
+    expect(at("storm-thunderhead").x).toBe(75);
+    expect(at("storm-barometer").x).toBe(87.5);
+    expect(at("storm-losing-your-marbles").x).toBe(100);
+    // One edge per prerequisite.
+    expect(edges).toHaveLength(
+      storm.nodes.reduce((sum, n) => sum + n.requires.length, 0),
+    );
+    expect(edges).toContainEqual({
+      from: "storm-thunderhead",
+      to: "storm-eye-of-the-hurricane",
+    });
+  });
+
+  it("never overlaps two nodes in a row", () => {
+    for (const path of SKILL_PATHS) {
+      const { points } = layoutSkillTree(path.nodes);
+      for (const tier of [1, 2, 3, 4]) {
+        const xs = path.nodes
+          .filter((n) => n.tier === tier)
+          .map((n) => points[n.id].x)
+          .sort((a, b) => a - b);
+        for (let i = 1; i < xs.length; i++) {
+          expect(xs[i] - xs[i - 1], path.id).toBeGreaterThanOrEqual(20);
+        }
+      }
+    }
+  });
+
+  it("labels each node by its place in the tree", () => {
+    expect(storm.nodes.map(skillNodeRole)).toEqual([
+      "root",
+      "branch",
+      "branch",
+      "spur",
+      "spur",
+      "tip",
+      "capstone",
+      "tip",
+    ]);
+  });
+});
+
 describe("perks", () => {
   it("adds up every unlocked node's perks", () => {
     const perks = aggregatePerks(
       SKILL_PATHS.find((p) => p.id === "stormbrewer")!.nodes,
     );
-    expect(perks.powerUpDiscount).toBe(4);
-    expect(perks.powerUpDiscounts).toEqual({ golden_week: 2, sabotage: 2 });
+    expect(perks.powerUpDiscount).toBe(5);
+    expect(perks.powerUpDiscounts).toEqual({
+      golden_week: 2,
+      sabotage: 5,
+      double_down: 2,
+      shield: 1,
+      mirror: 2,
+    });
     expect(perks.earn).toEqual({
-      "power-up-use": 5,
-      prediction: 1,
-      placement: 1,
+      "power-up-use": 9,
+      prediction: 2,
+      placement: 2,
     });
 
     const hacker = aggregatePerks(
@@ -191,18 +280,22 @@ describe("perks", () => {
     );
     expect(hacker.powerUpDiscounts).toEqual({
       hint: 8,
-      double_down: 4,
-      sabotage: 2,
+      double_down: 5,
+      sabotage: 3,
+      golden_week: 2,
+      mirror: 2,
+      shield: 2,
+      wish: 2,
     });
-    expect(hacker.earn.prediction).toBe(3);
+    expect(hacker.earn.prediction).toBe(5);
 
     const cartographer = aggregatePerks(
       SKILL_PATHS.find((p) => p.id === "elephant-cartographer")!.nodes,
     );
     expect(cartographer.shopDiscounts).toEqual({
-      pet: 2,
-      avatar: 2,
-      cosmetic: 2,
+      pet: 3,
+      avatar: 3,
+      cosmetic: 3,
     });
     expect(cartographer.eggDiscount).toBe(3);
   });
@@ -245,7 +338,7 @@ describe("perks", () => {
       SKILL_PATHS.find((p) => p.id === "elite-hacker")!.nodes,
     );
     expect(discountedPrice(powerUp(8, "hint"), hacker)).toBe(0);
-    expect(discountedPrice(powerUp(15, "sabotage"), hacker)).toBe(13);
+    expect(discountedPrice(powerUp(15, "sabotage"), hacker)).toBe(12);
 
     const cartographer = aggregatePerks([
       getSkillNode("cartographer-field-notes")!,
@@ -282,12 +375,15 @@ describe("perks", () => {
         aggregatePerks(SKILL_PATHS.find((p) => p.id === "stormbrewer")!.nodes),
       ),
     ).toEqual([
-      "+5 coins per power-up used",
-      "+1 coin per winner call",
-      "+1 coin per scored week",
-      "power-ups cost 4 coins less",
+      "+9 coins per power-up used",
+      "+2 coins per winner call",
+      "+2 coins per scored week",
+      "power-ups cost 5 coins less",
       "Golden Week costs 2 coins less on top",
-      "Sabotage costs 2 coins less on top",
+      "Sabotage costs 5 coins less on top",
+      "Double Down costs 2 coins less on top",
+      "Shield costs 1 coin less on top",
+      "Mirror costs 2 coins less on top",
     ]);
   });
 
@@ -503,6 +599,10 @@ describe("skill queries", () => {
           achievements: false,
           marketplace: false,
           bounties: false,
+          shop_deals: false,
+          shop_bundles: false,
+          shop_raffle: false,
+          shop_gift_wrap: false,
         },
         coins: coinData({
           items: [
@@ -561,7 +661,9 @@ describe("skill queries", () => {
     expect(view.paths[0].path.id).toBe("stormbrewer");
     expect(view.paths[0].unlockedCount).toBe(1);
     expect(view.balance).toBe(15);
-    const capstone = view.paths[0].tiers[2][0];
+    const capstone = view.paths[0].tiers
+      .flat()
+      .find((n) => n.node.id === "storm-eye-of-the-hurricane")!;
     expect(capstone.missing.map((n) => n.id)).toEqual([
       "storm-lightning-rod",
       "storm-thunderhead",

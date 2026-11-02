@@ -1,6 +1,8 @@
 import type {
   ActivePowerUpKind,
+  AvatarFrame,
   CoinRules,
+  CopyablePowerUpKind,
   Crate,
   CrateTierKind,
   CosmeticKind,
@@ -8,6 +10,7 @@ import type {
   NameColour,
   PassivePowerUpKind,
   PowerUpKind,
+  TargetedPowerUpKind,
   WishPowerUpKind,
   ProfileTheme,
   Rarity,
@@ -44,11 +47,55 @@ export const GOLDEN_WEEK_MULTIPLIER = 1.5;
 export const DOUBLE_DOWN_POINTS = 2;
 /** Points a Sabotage takes from its target (a deduction). */
 export const SABOTAGE_POINTS = -5;
+/** Points a Heist moves from its target to its user. */
+export const HEIST_POINTS = 5;
+/** Coin Rush multiplies the coins a week pays the player. */
+export const COIN_RUSH_MULTIPLIER = 2;
+/** Bounty Badge adds this share of the next bounty won (rounded up). */
+export const BOUNTY_BADGE_SHARE = 0.5;
+/** Underdog's bonus points, on the week after two bottom-half finishes. */
+export const UNDERDOG_POINTS = 5;
+/** How many weeks in a row in the bottom half trigger Underdog. */
+export const UNDERDOG_STREAK = 2;
 
 /** The most coins a player can gift in any rolling 7 days. */
 export const GIFT_WEEKLY_CAP = 5;
 export const GIFT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const GIFT_MESSAGE_MAX = 80;
+
+// ── Shop extras ───────────────────────────────────────────────────────
+
+/** A weekly raffle ticket's price, and how many one player can buy a week. */
+export const RAFFLE_TICKET_PRICE = 2;
+export const RAFFLE_MAX_TICKETS = 5;
+/** A rename token's price (they can be bought any number of times). */
+export const RENAME_TOKEN_PRICE = 3;
+export const PET_NAME_MAX = 24;
+/** Gift wrap's fee, on top of the item's price. */
+export const GIFT_WRAP_FEE = 2;
+/** The deal of the week's automatic discount. */
+export const DEAL_DISCOUNT_PERCENT = 30;
+/** The admin override's discount range, inclusive. */
+export const DEAL_DISCOUNT_RANGE = { min: 5, max: 90 } as const;
+/** The cheapest item the automatic deal picks (smaller discounts round away). */
+export const DEAL_MIN_PRICE = 4;
+/** The longest shell prompt template, in characters. */
+export const SHELL_PROMPT_MAX = 40;
+
+/** A deal's price: `discountPercent` off, rounded in the player's favour. */
+export function dealPrice(price: number, discountPercent: number): number {
+  return Math.floor((price * (100 - discountPercent)) / 100);
+}
+
+/** Bounty Badge's extra coins on a `reward` (rounded up). */
+export function bountyBadgeBonus(reward: number): number {
+  return Math.ceil(reward * BOUNTY_BADGE_SHARE);
+}
+
+/** A shell prompt template with the player's handle in place of `{name}`. */
+export function renderShellPrompt(template: string, handle: string): string {
+  return template.replaceAll("{name}", handle);
+}
 
 /** Golden Week's boost to a week's points, rounded up (never deepens a loss). */
 export function goldenWeekPoints(points: number): number {
@@ -64,6 +111,10 @@ export const COIN_RULES: CoinRules = {
   goldenWeekMultiplier: GOLDEN_WEEK_MULTIPLIER,
   doubleDownPoints: DOUBLE_DOWN_POINTS,
   sabotagePoints: -SABOTAGE_POINTS,
+  heistPoints: HEIST_POINTS,
+  coinRushMultiplier: COIN_RUSH_MULTIPLIER,
+  bountyBadgePercent: BOUNTY_BADGE_SHARE * 100,
+  underdogPoints: UNDERDOG_POINTS,
   giftWeeklyCap: GIFT_WEEKLY_CAP,
 };
 
@@ -78,6 +129,8 @@ export const COSMETIC_KINDS = [
   "title",
   "name_colour",
   "theme",
+  "shell_prompt",
+  "avatar_frame",
 ] as const satisfies readonly CosmeticKind[];
 
 export const LOADOUT_SLOTS = [
@@ -86,7 +139,19 @@ export const LOADOUT_SLOTS = [
   "title",
   "name_colour",
   "theme",
+  "shell_prompt",
+  "avatar_frame",
 ] as const satisfies readonly LoadoutSlot[];
+
+/** Avatar frames an admin can sell in the shop. */
+export const AVATAR_FRAMES = [
+  "neon",
+  "glitch",
+  "gold",
+  "ascii",
+  "rainbow",
+  "pumpkin",
+] as const satisfies readonly AvatarFrame[];
 
 /** Name colours an admin can sell in the shop. */
 export const SHOP_NAME_COLOURS = [
@@ -131,13 +196,33 @@ export const ACTIVE_POWER_UP_KINDS = [
   "hint",
   "golden_week",
   "sabotage",
+  "heist",
+  "freeze",
+  "spyglass",
+  "coin_rush",
+  "copycat",
 ] as const satisfies readonly ActivePowerUpKind[];
+
+/** What Copycat can copy: every active power-up but itself. */
+export const COPYABLE_POWER_UP_KINDS = ACTIVE_POWER_UP_KINDS.filter(
+  (kind): kind is CopyablePowerUpKind => kind !== "copycat",
+);
+
+/** Active power-ups aimed at another player. */
+export const TARGETED_POWER_UP_KINDS = [
+  "sabotage",
+  "heist",
+  "freeze",
+  "spyglass",
+] as const satisfies readonly TargetedPowerUpKind[];
 
 /** Power-ups that work by themselves once bought. */
 export const PASSIVE_POWER_UP_KINDS = [
   "shield",
   "mirror",
   "insurance",
+  "bounty_badge",
+  "underdog",
 ] as const satisfies readonly PassivePowerUpKind[];
 
 /** The One Wish Willow's effect: spent by making a wish, not on a week. */
@@ -153,6 +238,22 @@ export const POWER_UP_KINDS = [
 
 export const isActivePowerUp = (kind: PowerUpKind): kind is ActivePowerUpKind =>
   ACTIVE_POWER_UP_KINDS.some((k) => k === kind);
+
+export const isCopyablePowerUp = (
+  kind: PowerUpKind,
+): kind is CopyablePowerUpKind =>
+  COPYABLE_POWER_UP_KINDS.some((k) => k === kind);
+
+export const isTargetedPowerUp = (
+  kind: PowerUpKind,
+): kind is TargetedPowerUpKind =>
+  TARGETED_POWER_UP_KINDS.some((k) => k === kind);
+
+/** The effect a use has: a Copycat acts as what it copied. */
+export const appliedEffect = (use: {
+  effect: ActivePowerUpKind;
+  copiedEffect?: CopyablePowerUpKind;
+}): ActivePowerUpKind => use.copiedEffect ?? use.effect;
 
 // ── Bounties (player-posted challenges) ──────────────────────────────
 
@@ -181,7 +282,8 @@ export const MARKET_CRATE_ONLY_RANGE = { min: 5, max: 60 } as const;
 /**
  * Power-ups that can be resold: the ones spent by a stored row (a week's
  * use or a wish), so a sale can check the charge is unused. Passive ones
- * (Shield, Mirror, Insurance) are spent by derived effects and stay put.
+ * (Shield, Mirror, Insurance, Bounty Badge, Underdog) are spent by derived
+ * effects and stay put.
  */
 export const MARKET_POWER_UP_KINDS = [
   ...ACTIVE_POWER_UP_KINDS,

@@ -170,8 +170,8 @@ const positionClasses = (position: number) => {
             loadout.pet?.imageUrl && (
               <img
                 src={assetUrl(loadout.pet.imageUrl)}
-                alt={`Pet: ${loadout.pet.name}`}
-                title={loadout.pet.name}
+                alt={`Pet: ${loadout.petName ?? loadout.pet.name}`}
+                title={loadout.petName ?? loadout.pet.name}
                 width="32"
                 height="32"
                 class="absolute -bottom-2 -right-3 h-8 w-8 [image-rendering:pixelated] drop-shadow"
@@ -194,6 +194,14 @@ const positionClasses = (position: number) => {
             loadout.title && (
               <p class="mt-1 text-sm font-bold italic text-magenta">
                 “{loadout.title}”
+              </p>
+            )
+          }
+          {
+            loadout.shellPrompt && (
+              <p class="mt-1 truncate text-xs text-acid">
+                {loadout.shellPrompt}
+                <span class="caret" aria-hidden="true"></span>
               </p>
             )
           }

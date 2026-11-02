@@ -88,6 +88,10 @@ function setup({
         achievements: false,
         marketplace: false,
         bounties: false,
+        shop_deals: false,
+        shop_bundles: false,
+        shop_raffle: false,
+        shop_gift_wrap: false,
       },
       players: [player("ann", "Ann"), player("bob", "Bob"), player("cat")],
       tasks: [done, live],
@@ -357,7 +361,9 @@ describe("power-ups", () => {
         },
       ],
     });
-    expect(q.getSabotageTargets("ann", "w2").map((p) => p.id)).toEqual(["bob"]);
+    expect(q.getPowerUpTargets("ann", "w2").sabotage.map((p) => p.id)).toEqual([
+      "bob",
+    ]);
     expect(q.getSabotagesOf("cat").map((u) => u.player.id)).toEqual(["bob"]);
   });
 
@@ -448,6 +454,10 @@ describe("crates", () => {
           achievements: false,
           marketplace: false,
           bounties: false,
+          shop_deals: false,
+          shop_bundles: false,
+          shop_raffle: false,
+          shop_gift_wrap: false,
         },
         players: [player("ann", "Ann"), player("bob")],
         coins: coinData({
@@ -587,6 +597,10 @@ describe("limited-time stock", () => {
         achievements: false,
         marketplace: false,
         bounties: false,
+        shop_deals: false,
+        shop_bundles: false,
+        shop_raffle: false,
+        shop_gift_wrap: false,
       },
       players: [player("ann")],
       coins: coinData({
@@ -899,6 +913,10 @@ describe("gifted eggs", () => {
     achievements: false,
     marketplace: false,
     bounties: false,
+    shop_deals: false,
+    shop_bundles: false,
+    shop_raffle: false,
+    shop_gift_wrap: false,
   });
   const gift = (id: number, crateId: string, crateOpenId?: number) => ({
     id,

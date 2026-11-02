@@ -1,0 +1,34 @@
+---
+// The "target" picker for a power-up aimed at another player (Sabotage,
+// Heist, Freeze, Spyglass, or a Copycat of one), inside its use form.
+import type { Player } from "../types";
+import { inputClass, labelClass } from "./admin/styles";
+
+interface Props {
+  players: Player[];
+  class?: string;
+}
+
+const { players, class: className } = Astro.props;
+---
+
+{
+  players.length > 0 ? (
+    <label class:list={["block", className]}>
+      <span class={labelClass}>target</span>
+      <select
+        name="targetPlayerId"
+        required
+        class:list={[inputClass(false), "mt-1"]}
+      >
+        {players.map((target) => (
+          <option value={target.id}>{target.name}</option>
+        ))}
+      </select>
+    </label>
+  ) : (
+    <p class:list={["text-[11px] text-ink-faint", className]}>
+      Nobody left to aim it at this week.
+    </p>
+  )
+}

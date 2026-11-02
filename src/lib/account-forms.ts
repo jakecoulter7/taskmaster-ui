@@ -8,6 +8,7 @@ import {
 import type { BountyOutcome, MarketOutcome, PollSettings } from "../types";
 import {
   ACTIVE_POWER_UP_KINDS,
+  COPYABLE_POWER_UP_KINDS,
   BOUNTY_DAYS,
   BOUNTY_DETAILS_MAX,
   BOUNTY_NOTE_MAX,
@@ -18,7 +19,10 @@ import {
   GIFT_WEEKLY_CAP,
   LOADOUT_SLOTS,
   MARKET_LISTING_DAYS,
+  PET_NAME_MAX,
+  RAFFLE_MAX_TICKETS,
   WISH_MAX,
+  isTargetedPowerUp,
 } from "../data/coin-rules";
 
 // Validation for the player self-service forms under `/account`. Players can
@@ -211,10 +215,14 @@ const walletActionSchema = z.discriminatedUnion("intent", [
   }),
   z.object({
     intent: z.literal("use"),
-    // Shield, Mirror and Insurance are passive: they're never used.
+    // Passive power-ups (Shield, Mirror, Insurance…) are never used.
     effect: z.enum(ACTIVE_POWER_UP_KINDS),
+    // Copycat only: the power-up it copies. Blank for everything else.
+    copiedEffect: z
+      .union([z.literal(""), z.enum(COPYABLE_POWER_UP_KINDS)])
+      .transform((v) => (v === "" ? null : v)),
     taskId: walletId,
-    // Sabotage only: blank for every other power-up.
+    // Targeted power-ups only: blank for every other power-up.
     targetPlayerId: z
       .string()
       .trim()
@@ -227,8 +235,9 @@ export type WalletAction = z.output<typeof walletActionSchema>;
 
 /**
  * A wallet page action (equip, unequip, use a power-up, make a wish or send
- * a gift), or `undefined` for a malformed post. Sabotage must name a target;
- * nothing else may.
+ * a gift), or `undefined` for a malformed post. Targeted power-ups
+ * (Sabotage, Heist, Freeze, Spyglass, or a Copycat of one) must name a
+ * target and nothing else may; a Copycat must name what it copies.
  */
 export function parseWalletAction(form: FormData): WalletAction | undefined {
   const values = formValues(form);
@@ -237,6 +246,7 @@ export function parseWalletAction(form: FormData): WalletAction | undefined {
     itemId: values.itemId ?? "",
     slot: values.slot ?? "",
     effect: values.effect ?? "",
+    copiedEffect: values.copiedEffect ?? "",
     taskId: values.taskId ?? "",
     targetPlayerId: values.targetPlayerId ?? "",
     toPlayerId: values.toPlayerId ?? "",
@@ -246,11 +256,14 @@ export function parseWalletAction(form: FormData): WalletAction | undefined {
   });
   if (!parsed.success) return undefined;
   const action = parsed.data;
-  if (
-    action.intent === "use" &&
-    (action.effect === "sabotage") !== (action.targetPlayerId !== null)
-  ) {
-    return undefined;
+  if (action.intent === "use") {
+    if ((action.effect === "copycat") !== (action.copiedEffect !== null)) {
+      return undefined;
+    }
+    const applied = action.copiedEffect ?? action.effect;
+    if (isTargetedPowerUp(applied) !== (action.targetPlayerId !== null)) {
+      return undefined;
+    }
   }
   return action;
 }
@@ -485,4 +498,68 @@ export function describeBountyOutcome(outcome: BountyOutcome): {
   message: string;
 } {
   return BOUNTY_OUTCOMES[outcome];
+}
+
+// ── Shop extras (raffle, rename tokens, gift wrap, bundles) ───────────
+
+const shopId = z.string().trim().min(1).max(120);
+
+const shopExtraActionSchema = z.discriminatedUnion("intent", [
+  z.object({
+    intent: z.literal("raffle"),
+    taskId: shopId,
+    count: z
+      .string()
+      .trim()
+      .regex(/^\d{1,2}$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(RAFFLE_MAX_TICKETS)),
+  }),
+  z.object({ intent: z.literal("token") }),
+  z.object({
+    intent: z.literal("rename"),
+    itemId: shopId,
+    // One line: shown wherever the pet appears.
+    name: z
+      .string()
+      .trim()
+      .transform((v) => v.replace(/\s+/g, " "))
+      .pipe(z.string().min(1).max(PET_NAME_MAX)),
+  }),
+  z.object({
+    intent: z.literal("wrap"),
+    itemId: shopId,
+    toPlayerId: shopId,
+    anonymous: z.boolean(),
+    message: z
+      .string()
+      .trim()
+      .max(GIFT_MESSAGE_MAX)
+      .transform((v) => (v === "" ? null : v.replace(/\s+/g, " "))),
+  }),
+  z.object({ intent: z.literal("bundle"), bundleId: shopId }),
+]);
+
+export type ShopExtraAction = z.output<typeof shopExtraActionSchema>;
+
+/**
+ * A shop extras action (raffle tickets, a rename token, renaming a pet,
+ * gift wrap or a bundle), or `undefined` for a malformed post.
+ */
+export function parseShopExtraAction(
+  form: FormData,
+): ShopExtraAction | undefined {
+  const values = formValues(form);
+  const parsed = shopExtraActionSchema.safeParse({
+    intent: values.intent ?? "",
+    taskId: values.taskId ?? "",
+    count: values.count ?? "",
+    itemId: values.itemId ?? "",
+    name: values.name ?? "",
+    toPlayerId: values.toPlayerId ?? "",
+    anonymous: form.get("anonymous") === "on",
+    message: values.message ?? "",
+    bundleId: values.bundleId ?? "",
+  });
+  return parsed.success ? parsed.data : undefined;
 }

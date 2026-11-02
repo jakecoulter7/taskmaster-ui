@@ -12,6 +12,7 @@ import {
   bonusPoints as bonusPointsTable,
   bounties as bountiesTable,
   bountyClaims as bountyClaimsTable,
+  bundlePurchases as bundlePurchasesTable,
   changelogEntries as changelogTable,
   coinAdjustments as coinAdjustmentsTable,
   coinGifts as coinGiftsTable,
@@ -37,14 +38,20 @@ import {
   polls as pollsTable,
   pollVotes as pollVotesTable,
   predictions as predictionsTable,
+  raffleTickets as raffleTicketsTable,
   recaps as recapsTable,
+  renameTokens as renameTokensTable,
   seasons as seasonsTable,
+  shopBundleItems as shopBundleItemsTable,
+  shopBundles as shopBundlesTable,
+  shopDeals as shopDealsTable,
   taskScores as taskScoresTable,
   taskSubmissions as taskSubmissionsTable,
   tasks as tasksTable,
   teamMembers as teamMembersTable,
   teamScores as teamScoresTable,
   teams as teamsTable,
+  wrappedGifts as wrappedGiftsTable,
 } from "../db/schema";
 import { mapPlayers } from "./players";
 import { mapTeams } from "./teams";
@@ -60,6 +67,7 @@ import { mapChangelog, mapRecaps } from "./editorial";
 import { createSeasonDirectory, mapSeasons, rowsForSeason } from "./seasons";
 import {
   deriveSabotageBonusRows,
+  deriveUnderdogBonusRows,
   mapAdjustments,
   mapCrateOpens,
   mapEggGifts,
@@ -76,11 +84,20 @@ import {
   mapSkillUnlocks,
   powerUpKeys,
   resolveSabotages,
+  underdogClaims,
 } from "./coins";
 import { mapFeatureFlags } from "./feature-flags";
 import { mapMarket } from "./market-mappers";
 import { mapBounties } from "./bounty-mappers";
 import { mapMiniTaskCompletions, mapMiniTasks } from "./mini-tasks";
+import {
+  mapBundlePurchases,
+  mapBundles,
+  mapDealOverrides,
+  mapRaffle,
+  mapRenameTokens,
+  mapWrappedGifts,
+} from "./shop-extras";
 import { unlockedTaskIds } from "../lib/task-reveal";
 import { timestamptzToIso } from "../lib/time";
 import { cachedJson, purgeCached } from "../lib/edge-cache";
@@ -349,6 +366,26 @@ export function seasonRowQueries(db: HttpDatabase, scope: SeasonScope) {
       .select()
       .from(bountyClaimsTable)
       .where(inArray(bountyClaimsTable.bountyId, bountyIds)),
+    db
+      .select()
+      .from(raffleTicketsTable)
+      .where(forWeeks(raffleTicketsTable.taskId))
+      .orderBy(asc(raffleTicketsTable.id)),
+    db
+      .select()
+      .from(renameTokensTable)
+      .where(forPlayers(renameTokensTable.playerId))
+      .orderBy(asc(renameTokensTable.id)),
+    db
+      .select()
+      .from(wrappedGiftsTable)
+      .where(inSeasons(wrappedGiftsTable.seasonId))
+      .orderBy(asc(wrappedGiftsTable.id)),
+    db
+      .select()
+      .from(bundlePurchasesTable)
+      .where(forPlayers(bundlePurchasesTable.playerId))
+      .orderBy(asc(bundlePurchasesTable.id)),
   ] as const;
 }
 
@@ -383,6 +420,10 @@ function nameSeasonRows([
   marketSaleRows,
   bountyRows,
   bountyClaimRows,
+  raffleTicketRows,
+  renameTokenRows,
+  wrappedGiftRows,
+  bundlePurchaseRows,
 ]: BatchResponse<ReturnType<typeof seasonRowQueries>>) {
   return {
     playerRows,
@@ -414,6 +455,10 @@ function nameSeasonRows([
     marketSaleRows,
     bountyRows,
     bountyClaimRows,
+    raffleTicketRows,
+    renameTokenRows,
+    wrappedGiftRows,
+    bundlePurchaseRows,
   };
 }
 
@@ -441,6 +486,9 @@ async function fetchLiveRows() {
     changelogRows,
     shopItemRows,
     featureFlagRows,
+    shopBundleRows,
+    shopBundleItemRows,
+    shopDealRows,
     ...seasonResults
   ] = await db.batch([
     db.select().from(seasonsTable),
@@ -470,6 +518,9 @@ async function fetchLiveRows() {
       .orderBy(desc(changelogTable.date), desc(changelogTable.createdAt)),
     db.select().from(shopItemsTable),
     db.select().from(featureFlagsTable),
+    db.select().from(shopBundlesTable),
+    db.select().from(shopBundleItemsTable),
+    db.select().from(shopDealsTable),
     ...seasonRowQueries(db, { kind: "open" }),
   ]);
   return {
@@ -483,6 +534,9 @@ async function fetchLiveRows() {
     changelogRows,
     shopItemRows,
     featureFlagRows,
+    shopBundleRows,
+    shopBundleItemRows,
+    shopDealRows,
     ...nameSeasonRows(seasonResults),
   };
 }
@@ -631,6 +685,13 @@ async function buildSeasonCompetition(
     marketSaleRows,
     bountyRows,
     bountyClaimRows,
+    raffleTicketRows,
+    renameTokenRows,
+    wrappedGiftRows,
+    bundlePurchaseRows,
+    shopBundleRows,
+    shopBundleItemRows,
+    shopDealRows,
   }: CompetitionRows,
   viewer: CompetitionViewer,
   season: Season,
@@ -676,7 +737,8 @@ async function buildSeasonCompetition(
     teamScores: published(teamScoreRows),
   };
   // Clim Coin power-ups: Golden Week boosts task points before ranking,
-  // Double Down raises a correct call's bonus and Sabotage is a deduction.
+  // Double Down raises a correct call's bonus, Sabotage is a deduction,
+  // Heist moves points and Underdog adds some.
   const uses = mapPowerUpUses(powerUpUseRows);
   const context = {
     players,
@@ -723,7 +785,15 @@ async function buildSeasonCompetition(
     new Map(teams.map((t) => [t.id, t.name])),
     powerUpKeys(uses, "double_down"),
   );
-  const derivedBonuses = [...sabotageRows, ...predictionBonuses];
+  // Underdog watches finishing positions, which bonuses never change.
+  const underdogRows = deriveUnderdogBonusRows(
+    underdogClaims(tasks, ranked.scores, purchases, items),
+  );
+  const derivedBonuses = [
+    ...sabotageRows,
+    ...predictionBonuses,
+    ...underdogRows,
+  ];
   const records =
     derivedBonuses.length === 0
       ? ranked
@@ -762,6 +832,12 @@ async function buildSeasonCompetition(
       miniTaskCompletions: mapMiniTaskCompletions(miniTaskCompletionRows),
       market: mapMarket(marketListingRows, marketOfferRows, marketSaleRows),
       bounties: mapBounties(bountyRows, bountyClaimRows),
+      raffle: mapRaffle(raffleTicketRows, tasks),
+      renameTokens: mapRenameTokens(renameTokenRows),
+      wrappedGifts: mapWrappedGifts(wrappedGiftRows),
+      bundles: mapBundles(shopBundleRows, shopBundleItemRows),
+      bundlePurchases: mapBundlePurchases(bundlePurchaseRows),
+      dealOverrides: mapDealOverrides(shopDealRows),
     },
     features: mapFeatureFlags(featureFlagRows),
   };

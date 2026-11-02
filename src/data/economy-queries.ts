@@ -11,7 +11,7 @@ import type {
   EconomyWeek,
   Wallet,
 } from "../types";
-import { toWallClock } from "../lib/time";
+import { ukWeekStart } from "../lib/time";
 import { getCrate } from "./coin-rules";
 import { isOnSale } from "./coins";
 
@@ -29,6 +29,7 @@ const SOURCE_INFO: Record<EconomySource, { flow: EconomyFlow; label: string }> =
     votes: { flow: "earned", label: "votes & predictions" },
     "mini-tasks": { flow: "earned", label: "mini-tasks" },
     "skill-perks": { flow: "earned", label: "skill perks" },
+    "power-ups": { flow: "earned", label: "power-up bonuses" },
     grants: { flow: "granted", label: "admin grants" },
     deductions: { flow: "spent", label: "admin deductions" },
     shop: { flow: "spent", label: "shop purchases" },
@@ -37,6 +38,7 @@ const SOURCE_INFO: Record<EconomySource, { flow: EconomyFlow; label: string }> =
     gifts: { flow: "moved", label: "gifts" },
     market: { flow: "moved", label: "marketplace" },
     bounties: { flow: "moved", label: "bounties" },
+    raffle: { flow: "moved", label: "raffle pots" },
   };
 
 /**
@@ -66,18 +68,19 @@ const KIND_SOURCE: Record<
   "bounty-won": "bounties",
   "bounty-paid": undefined,
   "item-gift": undefined,
+  "coin-rush": "power-ups",
+  "bounty-badge": "power-ups",
+  "raffle-win": "raffle",
+  raffle: undefined,
+  rename: "shop",
+  bundle: "shop",
+  "gift-wrap-out": "shop",
+  "gift-wrap-in": undefined,
 };
 
 const FLOW_ORDER: EconomyFlow[] = ["earned", "granted", "spent", "moved"];
 
-/** The Monday (UK) of the week `iso` falls in, as `YYYY-MM-DD`. */
-export function ukWeekStart(iso: string): string {
-  const [date] = toWallClock(new Date(iso)).split(" ");
-  const [y, m, d] = date.split("-").map(Number);
-  const day = new Date(Date.UTC(y, m - 1, d));
-  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
-  return day.toISOString().slice(0, 10);
-}
+export { ukWeekStart };
 
 /**
  * The admin economy dashboard (spread into `createQueries`): where the
@@ -169,13 +172,20 @@ export function createEconomyQueries(data: CompetitionData, deps: EconomyDeps) {
       ...coins.skillUnlocks.flatMap((u) => u.purchaseId ?? []),
       ...coins.market.sales.map((s) => s.buyerPurchaseId),
     ]);
+    // Gift-wrapped copies were bought from the shop by the sender, at the
+    // price on their wrap; bundle copies count as sold (the bundle's price
+    // isn't split between its items).
+    const wrappedPrice = new Map(
+      coins.wrappedGifts.map((g) => [g.purchaseId, g.price]),
+    );
     const sales = new Map<string, { sold: number; revenue: number }>();
     for (const purchase of coins.purchases) {
       if (freeCopies.has(purchase.id)) continue;
       const row = sales.get(purchase.itemId) ?? { sold: 0, revenue: 0 };
       sales.set(purchase.itemId, {
         sold: row.sold + 1,
-        revenue: row.revenue + purchase.price,
+        revenue:
+          row.revenue + (wrappedPrice.get(purchase.id) ?? purchase.price),
       });
     }
     const shop: EconomyShopRow[] = coins.items

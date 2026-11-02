@@ -14,6 +14,7 @@ import {
 import { getDb } from "../db";
 import {
   bonusPoints,
+  bundlePurchases,
   changelogEntries,
   coinAdjustments,
   coinPurchases,
@@ -29,6 +30,9 @@ import {
   miniTaskCompletions,
   miniTasks,
   powerUpUses,
+  shopBundleItems,
+  shopBundles,
+  shopDeals,
   shopItems,
   playerAccounts,
   players,
@@ -72,6 +76,8 @@ import { submissionObjectKey } from "../lib/submission-forms";
 import type {
   AddEntryInput,
   BonusInput,
+  BundleInput,
+  DealInput,
   ChangelogInput,
   CoinAdjustmentInput,
   EggGiftInput,
@@ -1527,6 +1533,115 @@ export async function deleteShopItem(id: string): Promise<void> {
   await getDb().delete(shopItems).where(eq(shopItems.id, id));
 }
 
+// ── Shop bundles and the deal of the week ────────────────────────────
+
+export type BundleRecord = typeof shopBundles.$inferSelect & {
+  itemIds: string[];
+  purchases: number;
+};
+
+/** Every bundle in display order, with its items and how often it sold. */
+export async function listBundles(): Promise<BundleRecord[]> {
+  const db = getDb();
+  const [bundles, items, sold] = await db.batch([
+    db
+      .select()
+      .from(shopBundles)
+      .orderBy(asc(shopBundles.sortOrder), asc(shopBundles.name)),
+    db.select().from(shopBundleItems),
+    db
+      .select({ bundleId: bundlePurchases.bundleId, n: count() })
+      .from(bundlePurchases)
+      .groupBy(bundlePurchases.bundleId),
+  ]);
+  const counts = new Map(sold.map((row) => [row.bundleId, row.n]));
+  return bundles.map((bundle) => ({
+    ...bundle,
+    itemIds: items
+      .filter((item) => item.bundleId === bundle.id)
+      .map((item) => item.itemId)
+      .sort(),
+    purchases: counts.get(bundle.id) ?? 0,
+  }));
+}
+
+export async function getBundle(id: string): Promise<BundleRecord | undefined> {
+  return (await listBundles()).find((bundle) => bundle.id === id);
+}
+
+const bundleItemRows = (bundleId: string, itemIds: readonly string[]) =>
+  itemIds.map((itemId) => ({ bundleId, itemId }));
+
+export async function createBundle(input: BundleInput): Promise<void> {
+  const db = getDb();
+  const { itemIds, ...bundle } = input;
+  await db.batch([
+    db
+      .insert(shopBundles)
+      .values({ ...bundle, sortOrder: bundle.sortOrder ?? 0 }),
+    db.insert(shopBundleItems).values(bundleItemRows(bundle.id, itemIds)),
+  ]);
+}
+
+/**
+ * Saves a bundle and replaces its items. Copies already sold stay with
+ * their buyers; only future sales get the new line-up.
+ */
+export async function updateBundle(
+  id: string,
+  input: BundleInput,
+): Promise<void> {
+  const db = getDb();
+  await db.batch([
+    db
+      .update(shopBundles)
+      .set({
+        name: input.name,
+        description: input.description,
+        price: input.price,
+        available: input.available,
+        ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
+      })
+      .where(eq(shopBundles.id, id)),
+    db.delete(shopBundleItems).where(eq(shopBundleItems.bundleId, id)),
+    db.insert(shopBundleItems).values(bundleItemRows(id, input.itemIds)),
+  ]);
+}
+
+/** Deletes a bundle nobody bought (sold ones can only be retired). */
+export async function deleteBundle(id: string): Promise<void> {
+  await getDb().delete(shopBundles).where(eq(shopBundles.id, id));
+}
+
+/** Admin picks for the deal of the week, latest week first. */
+export async function listDealOverrides() {
+  return getDb().select().from(shopDeals).orderBy(desc(shopDeals.weekStart));
+}
+
+/** Sets (or replaces) the deal for the week starting `weekStart`. */
+export async function setDealOverride(
+  input: DealInput,
+  actor: AdminUser,
+): Promise<void> {
+  const fields = {
+    itemId: input.itemId,
+    discountPercent: input.discountPercent,
+    ...actorFields(actor),
+  };
+  await getDb()
+    .insert(shopDeals)
+    .values({ weekStart: input.weekStart, ...fields })
+    .onConflictDoUpdate({
+      target: shopDeals.weekStart,
+      set: { ...fields, updatedAt: sql`now()` },
+    });
+}
+
+/** Hands a week's deal back to the automatic rotation. */
+export async function clearDealOverride(weekStart: string): Promise<void> {
+  await getDb().delete(shopDeals).where(eq(shopDeals.weekStart, weekStart));
+}
+
 /** A player's Clim Coin grants and deductions, newest first. */
 export async function listCoinAdjustments(playerId: string) {
   return getDb()
@@ -1787,6 +1902,12 @@ export async function revokePowerUpUse(
 // ── Errors ────────────────────────────────────────────────────────────
 
 const CONSTRAINT_MESSAGES: Record<string, string> = {
+  shop_bundles_pkey: "A bundle with that id already exists.",
+  shop_bundle_items_item_id_shop_items_id_fk:
+    "That item is in a bundle. Take it out of the bundle (or retire it) first.",
+  bundle_purchases_bundle_id_shop_bundles_id_fk:
+    "Players bought this bundle, so it can't be deleted. Retire it instead.",
+  shop_deals_item_id_shop_items_id_fk: "That item no longer exists.",
   mini_tasks_reward_range: "A mini-task pays between 1 and 5 Clim Coin.",
   mini_tasks_ends_after_start: "The last day can't be before the first.",
   players_pkey: "A player with that id already exists.",

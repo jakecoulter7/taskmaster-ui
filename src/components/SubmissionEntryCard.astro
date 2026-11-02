@@ -20,6 +20,8 @@ interface Props {
    * the full-size image.
    */
   lightboxGroup?: string;
+  /** The submitter's shell prompt cosmetic, if they wear one. */
+  shellPrompt?: string;
   class?: string;
 }
 
@@ -31,6 +33,7 @@ const {
   ownLabel,
   showTiming = false,
   lightboxGroup,
+  shellPrompt,
   class: className = "",
 } = Astro.props;
 
@@ -51,6 +54,16 @@ const early = entry.msBeforeDeadline > 0;
     className,
   ]}
 >
+  {
+    shellPrompt && (
+      <p
+        class="truncate border-b border-grid-soft px-3 py-1.5 text-[11px] text-acid"
+        title={shellPrompt}
+      >
+        {shellPrompt} <span class="text-ink-faint">submit --entry</span>
+      </p>
+    )
+  }
   {
     entry.kind === "photo" && entry.mediaUrl ? (
       <a

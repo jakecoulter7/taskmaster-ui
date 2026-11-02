@@ -22,10 +22,19 @@ interface Props {
   outcome?: SubmissionOutcome;
   /** Formats an ISO timestamp for display (the page owns date formatting). */
   formatStamp: (iso: string) => string;
+  /** Shell prompt cosmetics by player id. */
+  shellPrompts?: Record<string, string>;
   class?: string;
 }
 
-const { taskId, panel, outcome, formatStamp, class: className } = Astro.props;
+const {
+  taskId,
+  panel,
+  outcome,
+  formatStamp,
+  shellPrompts = {},
+  class: className,
+} = Astro.props;
 const {
   settings,
   owner,
@@ -192,6 +201,7 @@ const field =
                 showSubmitter={isTeam}
                 showTiming
                 lightboxGroup={`entries-${taskId}`}
+                shellPrompt={shellPrompts[entry.playerId]}
                 class="h-full"
               >
                 {canDelete && (

@@ -22,7 +22,13 @@ import type {
   WishStatus,
 } from "../types";
 import { GIFT_BLOCK_LABEL, POWER_UP_BLOCK_LABEL } from "../lib/coin-ui";
-import { GIFT_MESSAGE_MAX, WISH_MAX, eggArt } from "../data/coin-rules";
+import {
+  GIFT_MESSAGE_MAX,
+  WISH_MAX,
+  eggArt,
+  isTargetedPowerUp,
+} from "../data/coin-rules";
+import TargetSelect from "./TargetSelect.astro";
 import { POWER_UP_INFO } from "../data/coins";
 import { ukDateFormat } from "../lib/time";
 import { assetUrl, withBase } from "../lib/url";
@@ -72,8 +78,10 @@ const {
 const SLOT_GROUPS: { slot: LoadoutSlot; label: string }[] = [
   { slot: "pet", label: "pet" },
   { slot: "avatar", label: "avatar" },
+  { slot: "avatar_frame", label: "avatar frame" },
   { slot: "title", label: "title" },
   { slot: "name_colour", label: "name colour" },
+  { slot: "shell_prompt", label: "shell prompt" },
   { slot: "theme", label: "profile theme" },
 ];
 const bySlot = (slot: LoadoutSlot): InventoryItem[] =>
@@ -208,6 +216,14 @@ const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
         )
       }
       {
+        panel.frozenBy && panel.task && !panel.used && (
+          <p class="rounded-md border border-cyan/40 bg-cyan/5 p-3 text-sm text-cyan">
+            <span aria-hidden="true">❄ </span>
+            {panel.frozenBy.name} froze you: no power-ups for you this week.
+          </p>
+        )
+      }
+      {
         hint && panel.task && (
           <div class="rounded-md border border-acid-dim bg-acid/5 p-3">
             <p class="text-[10px] uppercase tracking-[0.25em] text-acid">
@@ -220,10 +236,11 @@ const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
       {
         panel.options.length === 0 ? (
           <p class="text-xs text-ink-faint">
-            You don't hold any power-ups to use. (Shield, Mirror and Insurance
-            work by themselves; they're listed in your inventory.){" "}
+            You don't hold any power-ups to use. (Passive ones like Shield,
+            Mirror and Insurance work by themselves; they're listed in your
+            inventory.){" "}
             <a
-              href={withBase("/shop#shop-power_up")}
+              href={withBase("/shop?tab=power-ups")}
               class="text-cyan hover:underline"
             >
               Browse the shop →
@@ -244,41 +261,97 @@ const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
                   <p class="mt-auto text-[11px] text-ink-faint">
                     {POWER_UP_BLOCK_LABEL[option.blocked ?? "not-live"]}
                   </p>
+                ) : option.effect === "copycat" ? (
+                  <ul class="mt-auto space-y-2">
+                    {panel.copyable.map((choice) => (
+                      <li>
+                        <form
+                          method="post"
+                          class="space-y-2 rounded-md border border-grid/60 p-2"
+                        >
+                          <input type="hidden" name="intent" value="use" />
+                          <input type="hidden" name="effect" value="copycat" />
+                          <input
+                            type="hidden"
+                            name="copiedEffect"
+                            value={choice.effect}
+                          />
+                          <input
+                            type="hidden"
+                            name="taskId"
+                            value={panel.task?.id}
+                          />
+                          <p class="text-[11px] text-ink-faint">
+                            {choice.label} · used by{" "}
+                            {choice.usedBy.map((p) => p.name).join(", ")}
+                          </p>
+                          {isTargetedPowerUp(choice.effect) && (
+                            <TargetSelect
+                              players={panel.targets[choice.effect]}
+                            />
+                          )}
+                          {(!isTargetedPowerUp(choice.effect) ||
+                            panel.targets[choice.effect].length > 0) && (
+                            <button type="submit" class={btnGhost}>
+                              copy {choice.label}
+                            </button>
+                          )}
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
                   <form method="post" class="mt-auto space-y-2">
                     <input type="hidden" name="intent" value="use" />
                     <input type="hidden" name="effect" value={option.effect} />
                     <input type="hidden" name="taskId" value={panel.task.id} />
-                    {option.effect === "sabotage" &&
-                      (panel.targets.length > 0 ? (
-                        <label class="block">
-                          <span class={labelClass}>target</span>
-                          <select
-                            name="targetPlayerId"
-                            required
-                            class:list={[inputClass(false), "mt-1"]}
-                          >
-                            {panel.targets.map((target) => (
-                              <option value={target.id}>{target.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                      ) : (
-                        <p class="text-[11px] text-ink-faint">
-                          Everyone's already been sabotaged this week.
-                        </p>
-                      ))}
-                    {(option.effect !== "sabotage" ||
-                      panel.targets.length > 0) && (
-                      <button type="submit" class={btnPrimary}>
-                        use {option.label}
-                      </button>
+                    {isTargetedPowerUp(option.effect) && (
+                      <TargetSelect players={panel.targets[option.effect]} />
                     )}
+                    <button type="submit" class={btnPrimary}>
+                      use {option.label}
+                    </button>
                   </form>
                 )}
               </li>
             ))}
           </ul>
+        )
+      }
+      {
+        panel.spyglass.length > 0 && (
+          <div>
+            <h3 class="text-[10px] font-bold uppercase tracking-[0.25em] text-ink-faint">
+              spyglass log · only you see this
+            </h3>
+            <ul class="mt-2 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+              {panel.spyglass.map((report) => (
+                <li class="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span class="font-bold text-ink">{report.target.name}</span>
+                  <span class="flex gap-3 text-xs">
+                    <span
+                      class:list={[report.shield ? "text-cyan" : "text-ink-faint"]}
+                    >
+                      {report.shield ? "◈ Shield armed" : "no Shield"}
+                    </span>
+                    <span
+                      class:list={[
+                        report.mirror ? "text-magenta" : "text-ink-faint",
+                      ]}
+                    >
+                      {report.mirror ? "⇄ Mirror armed" : "no Mirror"}
+                    </span>
+                    <time
+                      datetime={report.at}
+                      class="text-[11px] text-ink-faint"
+                    >
+                      {dateFmt.format(new Date(report.at))}
+                    </time>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         )
       }
     </div>
@@ -523,7 +596,17 @@ const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
           )}
           {wearables.map((group) => (
             <div>
-              <h3 class="text-xs font-bold text-ink-dim">{group.label}</h3>
+              <h3 class="flex flex-wrap items-baseline gap-3 text-xs font-bold text-ink-dim">
+                {group.label}
+                {group.slot === "pet" && (
+                  <a
+                    href={withBase("/shop?tab=extras#rename")}
+                    class="font-normal text-cyan hover:underline"
+                  >
+                    rename a pet →
+                  </a>
+                )}
+              </h3>
               <ul class="mt-2 grid gap-3 sm:grid-cols-2">
                 {bySlot(group.slot).map(({ item, equipped, listingId }) => (
                   <li

@@ -1,6 +1,21 @@
 import type {
   ActivePowerUpKind,
+  BundleBlock,
+  BundleView,
+  CoinOutcome,
   CompetitionData,
+  GiftWrapBlock,
+  GiftWrapPanel,
+  NameablePet,
+  RaffleBlock,
+  RaffleDrawView,
+  RafflePanel,
+  RenameBlock,
+  RenamePanel,
+  ShopBundle,
+  WrappedGiftView,
+  CopycatChoice,
+  CopyablePowerUpKind,
   CratePull,
   CrateView,
   EggGiftView,
@@ -21,7 +36,10 @@ import type {
   PurchaseBlock,
   ShopItem,
   ShopSection,
+  ShopDeal,
   SkillPerks,
+  SpyglassReport,
+  TargetedPowerUpKind,
   Task,
   UnopenedEgg,
   Wallet,
@@ -29,25 +47,42 @@ import type {
 } from "../types";
 import {
   ACTIVE_POWER_UP_KINDS,
+  AVATAR_FRAMES,
   CATEGORY_INFO,
   NAME_COLOURS,
   POWER_UP_INFO,
   PROFILE_THEMES,
   SHOP_CATEGORIES,
+  bountyBadgeClaims,
   crateAverageValue,
   crateOdds,
   deriveWallet,
   giftAllowance,
   insuranceClaims,
+  isAttack,
   isOnSale,
   resolveSabotages,
   slotOf,
+  spyglassFindings,
+  underdogClaims,
 } from "./coins";
 import {
   GIFT_WEEKLY_CAP,
+  appliedEffect,
   cratesOnSale,
+  dealPrice,
   getCrate,
   inSaleWindow,
+  isCopyablePowerUp,
+  isTargetedPowerUp,
+  renderShellPrompt,
+} from "./coin-rules";
+import { dealWeekBounds, pickDeal } from "./shop-extras";
+import {
+  GIFT_WRAP_FEE,
+  RAFFLE_MAX_TICKETS,
+  RAFFLE_TICKET_PRICE,
+  RENAME_TOKEN_PRICE,
 } from "./coin-rules";
 import { liveListingsByPurchase, soldPurchaseIds } from "./market-mappers";
 import {
@@ -89,6 +124,16 @@ export function createCoinQueries(data: CompetitionData) {
     [...sabotages.values()].flatMap((r) => r.defencePurchaseId ?? []),
   );
   const resultsOut = (taskId: string) => taskId in data.resultsPostedAt;
+  // Underdog charges that have paid out (they're spent once triggered).
+  const underdogSpent = new Set(
+    underdogClaims(tasks, data.scores, coins.purchases, coins.items).map(
+      (c) => c.purchaseId,
+    ),
+  );
+  // This week's deal (behind the deal of the week flag).
+  const deal = features.shop_deals
+    ? pickDeal(coins.items, coins.dealOverrides)
+    : undefined;
   // Marketplace: copies sold on are no longer the seller's, and a copy on
   // sale can't be worn or used until its listing closes or lapses.
   const sold = soldPurchaseIds(coins.market);
@@ -104,6 +149,8 @@ export function createCoinQueries(data: CompetitionData) {
     ),
     ...coins.market.sales.map((s) => s.buyerPurchaseId),
   ]);
+  // Gift-wrapped items and bundle copies were bought from the shop, so they
+  // do count towards limited stock.
   const shopSales = new Map<string, number>();
   for (const p of coins.purchases) {
     if (grantedPurchaseIds.has(p.id)) continue;
@@ -121,7 +168,9 @@ export function createCoinQueries(data: CompetitionData) {
     return new Set([
       ...usedPurchaseIds,
       ...spentDefenceIds,
+      ...underdogSpent,
       ...insuranceClaims(data, playerId).values(),
+      ...bountyBadgeClaims(data, playerId).keys(),
     ]);
   }
 
@@ -138,11 +187,22 @@ export function createCoinQueries(data: CompetitionData) {
     return skillPerksFor(coins.skillUnlocks, playerId);
   }
 
-  /** What `item` costs `playerId` now, after their skill tree discounts. */
-  function getItemPrice(item: ShopItem, playerId: string | undefined): number {
-    return playerId
-      ? discountedPrice(item, getSkillPerks(playerId))
+  /** What `item` costs before skill perks: this week's deal applies. */
+  function basePrice(item: ShopItem): number {
+    return deal?.item.id === item.id
+      ? dealPrice(item.price, deal.discountPercent)
       : item.price;
+  }
+
+  /**
+   * What `item` costs `playerId` now: this week's deal (if it's the deal),
+   * then their skill tree discounts.
+   */
+  function getItemPrice(item: ShopItem, playerId: string | undefined): number {
+    const priced = { ...item, price: basePrice(item) };
+    return playerId
+      ? discountedPrice(priced, getSkillPerks(playerId))
+      : priced.price;
   }
 
   const wearableIds = (purchases: readonly { itemId: string }[]) =>
@@ -213,26 +273,62 @@ export function createCoinQueries(data: CompetitionData) {
     return result;
   }
 
+  /** The custom name a player gave one of their pets, if any. */
+  function petNameOf(playerId: string, itemId: string): string | undefined {
+    let name: string | undefined;
+    for (const token of coins.renameTokens) {
+      if (
+        token.playerId === playerId &&
+        token.itemId === itemId &&
+        token.name
+      ) {
+        name = token.name;
+      }
+    }
+    return name;
+  }
+
   function getLoadout(playerId: string): PlayerLoadout {
     const worn = equippedItems(playerId);
     const value = (slot: string) => worn.get(slot)?.cosmetic?.value;
     const nameColour = NAME_COLOURS.find((c) => c === value("name_colour"));
     const theme = PROFILE_THEMES.find((t) => t === value("theme"));
+    const avatarFrame = AVATAR_FRAMES.find((f) => f === value("avatar_frame"));
+    const prompt = value("shell_prompt");
     const pet = worn.get("pet");
+    const petName = pet && petNameOf(playerId, pet.id);
     const avatar = worn.get("avatar");
     const title = value("title");
     return {
       ...(pet && { pet }),
+      ...(petName && { petName }),
       ...(avatar && { avatar }),
       ...(title && { title }),
       ...(nameColour && { nameColour }),
       ...(theme && { theme }),
+      ...(prompt && { shellPrompt: renderShellPrompt(prompt, playerId) }),
+      ...(avatarFrame && { avatarFrame }),
     };
+  }
+
+  /** A player's equipped avatar frame, if any (drawn round their avatar). */
+  function getAvatarFrame(playerId: string) {
+    return getLoadout(playerId).avatarFrame;
+  }
+
+  /** Every player's shell prompt with any equipped, by player id. */
+  function getShellPrompts(): Record<string, string> {
+    return Object.fromEntries(
+      players.flatMap((p) => {
+        const prompt = getLoadout(p.id).shellPrompt;
+        return prompt ? [[p.id, prompt] as const] : [];
+      }),
+    );
   }
 
   /** The cosmetics public lists (leaderboard, player cards) show. */
   function getPlayerFlair(playerId: string): PlayerFlair {
-    const { pet, title, nameColour } = getLoadout(playerId);
+    const { pet, petName, title, nameColour } = getLoadout(playerId);
     // The pathway sigil goes with the skill trees flag.
     const pick = skillTreesOn
       ? coins.skillPaths.find((p) => p.playerId === playerId)
@@ -240,7 +336,7 @@ export function createCoinQueries(data: CompetitionData) {
     const path = pick && getSkillPath(pick.pathId);
     return {
       ...(pet?.imageUrl && {
-        pet: { name: pet.name, imageUrl: pet.imageUrl },
+        pet: { name: petName ?? pet.name, imageUrl: pet.imageUrl },
       }),
       ...(title && { title }),
       ...(nameColour && { nameColour }),
@@ -395,12 +491,21 @@ export function createCoinQueries(data: CompetitionData) {
     return items.map((item) => {
       const blocked = getPurchaseBlock(item, { playerId }, now);
       const remaining = item.crateOnly ? undefined : getStockLeft(item);
+      const onDeal = deal?.item.id === item.id ? deal : undefined;
       return {
         item,
         price: getItemPrice(item, playerId),
         owned: item.powerUp ? effects.has(item.powerUp) : owned.has(item.id),
         charges: charges.get(item.id) ?? 0,
         ...(remaining !== undefined && { remaining }),
+        ...(onDeal && {
+          deal: {
+            percent: onDeal.discountPercent,
+            fullPrice: playerId
+              ? discountedPrice(item, getSkillPerks(playerId))
+              : item.price,
+          },
+        }),
         ...(blocked && { blocked }),
       };
     });
@@ -444,13 +549,18 @@ export function createCoinQueries(data: CompetitionData) {
   }
 
   const FEED_LABELS: Record<
-    ActivePowerUpKind,
+    CopyablePowerUpKind,
     (target: Player | undefined) => string
   > = {
     golden_week: () => "went for a Golden Week",
     double_down: () => "doubled down on their winner call",
     hint: () => "took the Taskmaster's Hint",
     sabotage: (target) => `sabotaged ${target?.name ?? "a rival"}`,
+    heist: (target) => `pulled a Heist on ${target?.name ?? "a rival"}`,
+    freeze: (target) => `froze ${target?.name ?? "a rival"}`,
+    spyglass: (target) =>
+      `peered at ${target?.name ?? "a rival"} through a Spyglass`,
+    coin_rush: () => "started a Coin Rush",
   };
 
   const SABOTAGE_TWIST: Record<
@@ -469,18 +579,26 @@ export function createCoinQueries(data: CompetitionData) {
       : undefined;
     // Shields and Mirrors stay secret until the week's results are out.
     const outcome =
-      use.effect === "sabotage" && resultsOut(use.taskId)
+      isAttack(use) && resultsOut(use.taskId)
         ? (sabotages.get(use.id)?.outcome ?? "hit")
         : undefined;
     const twist =
       outcome === "blocked" || outcome === "reflected"
         ? SABOTAGE_TWIST[outcome](target?.name ?? "their target")
         : "";
+    const action = FEED_LABELS[use.copiedEffect ?? "hint"];
+    const label =
+      use.effect === "copycat" && use.copiedEffect
+        ? `copycatted a ${POWER_UP_INFO[use.copiedEffect].label} and ${action(target)}`
+        : use.effect === "copycat"
+          ? "used Copycat"
+          : FEED_LABELS[use.effect](target);
     return {
       id: use.id,
       taskId: use.taskId,
       effect: use.effect,
-      label: `${FEED_LABELS[use.effect](target)}${twist}`,
+      ...(use.copiedEffect && { copiedEffect: use.copiedEffect }),
+      label: `${label}${twist}`,
       player,
       ...(target && { target }),
       ...(outcome && { outcome }),
@@ -495,17 +613,24 @@ export function createCoinQueries(data: CompetitionData) {
       .flatMap((u) => toFeedEntry(u) ?? []);
   }
 
-  /** Every Sabotage that hit a player, oldest first (for notifications). */
+  /**
+   * Every Sabotage, Heist and Freeze aimed at a player, oldest first (for
+   * notifications). Spyglasses stay quiet.
+   */
   function getSabotagesOf(playerId: string): PowerUpFeedEntry[] {
     return coins.uses
-      .filter((u) => u.effect === "sabotage" && u.targetPlayerId === playerId)
+      .filter(
+        (u) =>
+          u.targetPlayerId === playerId &&
+          (isAttack(u) || appliedEffect(u) === "freeze"),
+      )
       .flatMap((u) => toFeedEntry(u) ?? []);
   }
 
-  /** Every Sabotage a player used, oldest first (for notifications). */
+  /** Every Sabotage and Heist a player used, oldest first (for notifications). */
   function getSabotagesBy(playerId: string): PowerUpFeedEntry[] {
     return coins.uses
-      .filter((u) => u.effect === "sabotage" && u.playerId === playerId)
+      .filter((u) => isAttack(u) && u.playerId === playerId)
       .flatMap((u) => toFeedEntry(u) ?? []);
   }
 
@@ -516,21 +641,86 @@ export function createCoinQueries(data: CompetitionData) {
       : tasks.find((t) => t.status === "live" && !t.resultsHeld);
   }
 
-  /** Players `playerId` may sabotage on `taskId` (squad-mates included). */
-  function getSabotageTargets(playerId: string, taskId: string): Player[] {
-    const hit = new Set(
-      coins.uses
-        .filter((u) => u.taskId === taskId && u.effect === "sabotage")
-        .map((u) => u.targetPlayerId),
+  /** Who froze `playerId` on `taskId`, if anyone did. */
+  function frozenBy(playerId: string, taskId: string): Player | undefined {
+    const freeze = coins.uses.find(
+      (u) =>
+        u.taskId === taskId &&
+        u.targetPlayerId === playerId &&
+        appliedEffect(u) === "freeze",
     );
-    return players.filter((p) => p.id !== playerId && !hit.has(p.id));
+    return freeze && playerById.get(freeze.playerId);
   }
 
-  /** Why `effect` can't be used on `task` now, or `undefined` when it can. */
+  /**
+   * Who `playerId` may aim each targeted power-up at on `taskId`: anyone
+   * else not yet sabotaged or robbed (Sabotage and Heist share the limit),
+   * anyone who hasn't used a power-up yet and isn't frozen (Freeze), and
+   * anyone at all (Spyglass). Squad-mates included.
+   */
+  function getPowerUpTargets(
+    playerId: string,
+    taskId: string,
+  ): Record<TargetedPowerUpKind, Player[]> {
+    const week = coins.uses.filter((u) => u.taskId === taskId);
+    const hit = new Set(
+      week.filter((u) => isAttack(u)).map((u) => u.targetPlayerId),
+    );
+    const used = new Set(week.map((u) => u.playerId));
+    const frozen = new Set(
+      week
+        .filter((u) => appliedEffect(u) === "freeze")
+        .map((u) => u.targetPlayerId),
+    );
+    const others = players.filter((p) => p.id !== playerId);
+    const unhit = others.filter((p) => !hit.has(p.id));
+    return {
+      sabotage: unhit,
+      heist: unhit,
+      freeze: others.filter((p) => !used.has(p.id) && !frozen.has(p.id)),
+      spyglass: others,
+    };
+  }
+
+  /** The week before `task`, by week number (Copycat copies from it). */
+  function previousWeek(task: Task): Task | undefined {
+    return tasks
+      .filter((t) => t.weekNumber < task.weekNumber)
+      .sort((a, b) => b.weekNumber - a.weekNumber)[0];
+  }
+
+  /** What Copycat can copy on `task`: effects others used the week before. */
+  function getCopyable(
+    playerId: string,
+    task: Task | undefined,
+  ): CopycatChoice[] {
+    const before = task && previousWeek(task);
+    if (!before) return [];
+    const usedBy = new Map<CopyablePowerUpKind, Player[]>();
+    for (const use of coins.uses) {
+      if (use.taskId !== before.id || use.playerId === playerId) continue;
+      const effect = appliedEffect(use);
+      const player = playerById.get(use.playerId);
+      if (!isCopyablePowerUp(effect) || !player) continue;
+      usedBy.set(effect, [...(usedBy.get(effect) ?? []), player]);
+    }
+    return [...usedBy].map(([effect, by]) => ({
+      effect,
+      label: POWER_UP_INFO[effect].label,
+      usedBy: by,
+    }));
+  }
+
+  /**
+   * Why `effect` can't be used on `task` now, or `undefined` when it can.
+   * For Copycat, `copied` is what it would copy: that effect's own
+   * conditions apply too.
+   */
   function getPowerUpBlock(
     playerId: string,
     task: Task | undefined,
     effect: ActivePowerUpKind,
+    copied?: CopyablePowerUpKind,
   ): PowerUpBlock | undefined {
     if (seasonClosed) return "season-closed";
     if (chargesFor(playerId, effect) === 0) return "no-charge";
@@ -541,14 +731,60 @@ export function createCoinQueries(data: CompetitionData) {
     ) {
       return "already-used";
     }
+    if (frozenBy(playerId, task.id)) return "frozen";
+    if (effect === "copycat") {
+      const choices = getCopyable(playerId, task);
+      if (choices.length === 0) return "nothing-to-copy";
+      if (copied === undefined) return undefined;
+      if (!choices.some((c) => c.effect === copied)) return "nothing-to-copy";
+    }
+    const applied = effect === "copycat" ? copied : effect;
     if (
-      effect === "double_down" &&
+      applied === "double_down" &&
       !predictions.some((p) => p.taskId === task.id && p.playerId === playerId)
     ) {
       return "no-prediction";
     }
-    if (effect === "hint" && !coins.hints[task.id]) return "no-hint";
+    if (applied === "hint" && !coins.hints[task.id]) return "no-hint";
+    if (
+      applied &&
+      isTargetedPowerUp(applied) &&
+      getPowerUpTargets(playerId, task.id)[applied].length === 0
+    ) {
+      return "no-targets";
+    }
     return undefined;
+  }
+
+  /** What each of a player's Spyglasses saw, newest first. */
+  function getSpyglassReports(playerId: string): SpyglassReport[] {
+    return coins.uses
+      .filter(
+        (u) =>
+          u.playerId === playerId &&
+          appliedEffect(u) === "spyglass" &&
+          u.targetPlayerId,
+      )
+      .flatMap((use): SpyglassReport[] => {
+        const target = playerById.get(use.targetPlayerId ?? "");
+        if (!target) return [];
+        return [
+          {
+            useId: use.id,
+            taskId: use.taskId,
+            target,
+            ...spyglassFindings(
+              use,
+              coins.uses,
+              coins.purchases,
+              coins.items,
+              sabotages,
+            ),
+            at: use.at,
+          },
+        ];
+      })
+      .reverse();
   }
 
   /** The wallet page's "use a power-up" panel, for the live week. */
@@ -571,11 +807,17 @@ export function createCoinQueries(data: CompetitionData) {
         },
       ];
     });
+    const frozen = task && frozenBy(playerId, task.id);
     return {
       ...(task && { task }),
       ...(used && { used }),
       options,
-      targets: task ? getSabotageTargets(playerId, task.id) : [],
+      targets: task
+        ? getPowerUpTargets(playerId, task.id)
+        : { sabotage: [], heist: [], freeze: [], spyglass: [] },
+      copyable: getCopyable(playerId, task),
+      ...(frozen && { frozenBy: frozen }),
+      spyglass: getSpyglassReports(playerId),
     };
   }
 
@@ -632,7 +874,9 @@ export function createCoinQueries(data: CompetitionData) {
     if (!playerId) return undefined;
     const used = coins.uses.some(
       (u) =>
-        u.taskId === taskId && u.playerId === playerId && u.effect === "hint",
+        u.taskId === taskId &&
+        u.playerId === playerId &&
+        appliedEffect(u) === "hint",
     );
     return used ? coins.hints[taskId] : undefined;
   }
@@ -758,6 +1002,274 @@ export function createCoinQueries(data: CompetitionData) {
     return open && toPull(open);
   }
 
+  // ── Shop extras ─────────────────────────────────────────────────────
+
+  /** This week's deal as `viewer` sees it, if the flag is on. */
+  function getShopDeal(
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): ShopDeal | undefined {
+    if (!deal || !isListed(deal.item, now)) return undefined;
+    const [listing] = toListings([deal.item], viewer, now);
+    const playerId =
+      viewer.playerId && playerById.has(viewer.playerId)
+        ? viewer.playerId
+        : undefined;
+    const fullPrice = playerId
+      ? discountedPrice(deal.item, getSkillPerks(playerId))
+      : deal.item.price;
+    return {
+      listing,
+      discountPercent: deal.discountPercent,
+      fullPrice,
+      ...dealWeekBounds(deal.weekStart),
+      automatic: deal.automatic,
+    };
+  }
+
+  /** Whether a player has had `item` (or, for a power-up, its effect). */
+  function hasHad(playerId: string, item: ShopItem): boolean {
+    return item.powerUp
+      ? boughtEffects(playerId).has(item.powerUp)
+      : everOwnedItemIds(playerId).has(item.id);
+  }
+
+  /** Why `viewer` can't buy `bundle` now, or `undefined` when they can. */
+  function getBundleBlock(
+    bundle: ShopBundle,
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): BundleBlock | undefined {
+    const items = bundle.itemIds.flatMap((id) => itemById.get(id) ?? []);
+    if (!viewer.playerId || !playerById.has(viewer.playerId)) return "guest";
+    if (seasonClosed) return "season-closed";
+    const playerId = viewer.playerId;
+    if (items.some((item) => hasHad(playerId, item))) return "owned";
+    if (
+      !features.shop_bundles ||
+      !bundle.available ||
+      items.length === 0 ||
+      items.length !== bundle.itemIds.length ||
+      items.some(
+        (item) => !isOnSale(item, now) || item.crateOnly || item.skillOnly,
+      )
+    ) {
+      return "unavailable";
+    }
+    if (items.some((item) => getStockLeft(item) === 0)) return "sold-out";
+    if (getWallet(playerId, now).balance < bundle.price) return "unaffordable";
+    return undefined;
+  }
+
+  /** The bundles on sale, as `viewer` sees them (none while the flag's off). */
+  function getBundleViews(
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): BundleView[] {
+    if (!features.shop_bundles) return [];
+    return coins.bundles.flatMap((bundle): BundleView[] => {
+      const items = bundle.itemIds.flatMap((id) => itemById.get(id) ?? []);
+      // Bundles with an item that's left the shelves aren't shown at all.
+      if (
+        !bundle.available ||
+        items.length === 0 ||
+        items.length !== bundle.itemIds.length ||
+        items.some((item) => !isListed(item, now) || item.crateOnly)
+      ) {
+        return [];
+      }
+      const blocked = getBundleBlock(bundle, viewer, now);
+      return [
+        {
+          bundle,
+          items,
+          value: items.reduce((sum, item) => sum + item.price, 0),
+          ...(blocked && { blocked }),
+        },
+      ];
+    });
+  }
+
+  function getShopBundleById(id: string): ShopBundle | undefined {
+    return coins.bundles.find((b) => b.id === id);
+  }
+
+  /** The shop's raffle panel for `viewer` (the live week's raffle). */
+  function getRafflePanel(
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): RafflePanel {
+    const task = getPowerUpWeek();
+    const playerId =
+      viewer.playerId && playerById.has(viewer.playerId)
+        ? viewer.playerId
+        : undefined;
+    const week = task
+      ? coins.raffle.tickets.filter((t) => t.taskId === task.id)
+      : [];
+    const mine = week.filter((t) => t.playerId === playerId).length;
+    const balance = playerId ? getWallet(playerId, now).balance : 0;
+    const affordable = Math.max(0, Math.floor(balance / RAFFLE_TICKET_PRICE));
+    const left = Math.max(0, RAFFLE_MAX_TICKETS - mine);
+    const blocked: RaffleBlock | undefined = !playerId
+      ? "guest"
+      : seasonClosed
+        ? "season-closed"
+        : !task
+          ? "no-week"
+          : left === 0
+            ? "limit"
+            : affordable === 0
+              ? "unaffordable"
+              : undefined;
+    const taskById = new Map(tasks.map((t) => [t.id, t]));
+    const draws = [...coins.raffle.draws]
+      .reverse()
+      .flatMap((draw): RaffleDrawView[] => {
+        const drawn = taskById.get(draw.taskId);
+        const winner = playerById.get(draw.winnerId);
+        return drawn && winner
+          ? [
+              {
+                task: drawn,
+                winner,
+                pot: draw.pot,
+                tickets: draw.tickets,
+                at: draw.at,
+              },
+            ]
+          : [];
+      });
+    return {
+      ...(task && { task }),
+      ticketPrice: RAFFLE_TICKET_PRICE,
+      maxTickets: RAFFLE_MAX_TICKETS,
+      myTickets: mine,
+      totalTickets: week.length,
+      pot: week.reduce((sum, t) => sum + t.price, 0),
+      canBuy: blocked ? 0 : Math.min(left, affordable),
+      ...(blocked && { blocked }),
+      draws,
+    };
+  }
+
+  /** The shop's rename token panel for `viewer`. */
+  function getRenamePanel(
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): RenamePanel {
+    const playerId =
+      viewer.playerId && playerById.has(viewer.playerId)
+        ? viewer.playerId
+        : undefined;
+    const owned = playerId ? ownedItemIds(playerId) : new Set<string>();
+    const pets = coins.items.flatMap((item): NameablePet[] => {
+      if (!playerId || item.category !== "pet" || !owned.has(item.id)) {
+        return [];
+      }
+      const customName = petNameOf(playerId, item.id);
+      return [{ item, ...(customName && { customName }) }];
+    });
+    const blocked: RenameBlock | undefined = !playerId
+      ? "guest"
+      : seasonClosed
+        ? "season-closed"
+        : getWallet(playerId, now).balance < RENAME_TOKEN_PRICE
+          ? "unaffordable"
+          : undefined;
+    return {
+      price: RENAME_TOKEN_PRICE,
+      tokens: coins.renameTokens.filter(
+        (t) => t.playerId === playerId && !t.usedAt,
+      ).length,
+      pets,
+      ...(blocked && { blocked }),
+    };
+  }
+
+  /** Whether the shop sells `item` for gift wrapping now. */
+  function isWrappable(item: ShopItem, now: number): boolean {
+    return (
+      item.category !== "power_up" &&
+      isListed(item, now) &&
+      !item.crateOnly &&
+      getStockLeft(item) !== 0
+    );
+  }
+
+  /** The shop's gift wrap panel for `viewer`. */
+  function getGiftWrapPanel(
+    viewer: ShopViewer,
+    now: number = Date.now(),
+  ): GiftWrapPanel {
+    const playerId =
+      viewer.playerId && playerById.has(viewer.playerId)
+        ? viewer.playerId
+        : undefined;
+    const recipients = players.filter((p) => p.id !== playerId);
+    const items = coins.items
+      .filter((item) => isWrappable(item, now))
+      .map((item) => ({ item, price: getItemPrice(item, playerId) }));
+    const blocked: GiftWrapBlock | undefined = !playerId
+      ? "guest"
+      : seasonClosed
+        ? "season-closed"
+        : recipients.length === 0
+          ? "no-recipients"
+          : items.length === 0
+            ? "nothing-to-wrap"
+            : undefined;
+    return {
+      fee: GIFT_WRAP_FEE,
+      recipients,
+      items,
+      ...(blocked && { blocked }),
+    };
+  }
+
+  /**
+   * Why `fromPlayerId` can't gift-wrap `item` for `toPlayerId` now (an
+   * outcome to show), or `undefined` when they can.
+   */
+  function getGiftWrapBlock(
+    fromPlayerId: string,
+    toPlayerId: string,
+    item: ShopItem,
+    now: number = Date.now(),
+  ): CoinOutcome | undefined {
+    if (!features.shop_gift_wrap) return "disabled";
+    if (seasonClosed) return "season-closed";
+    if (!playerById.has(fromPlayerId)) return "invalid";
+    if (fromPlayerId === toPlayerId || !playerById.has(toPlayerId)) {
+      return "invalid";
+    }
+    if (!isWrappable(item, now)) {
+      return getStockLeft(item) === 0 ? "sold-out" : "unavailable";
+    }
+    if (everOwnedItemIds(toPlayerId).has(item.id)) return "recipient-owns";
+    if (
+      getWallet(fromPlayerId, now).balance <
+      getItemPrice(item, fromPlayerId) + GIFT_WRAP_FEE
+    ) {
+      return "unaffordable";
+    }
+    return undefined;
+  }
+
+  /** Items gift-wrapped for a player, newest first. */
+  function getWrappedGiftsFor(playerId: string): WrappedGiftView[] {
+    return [...coins.wrappedGifts]
+      .reverse()
+      .flatMap((gift): WrappedGiftView[] => {
+        const item = itemById.get(gift.itemId);
+        if (gift.toPlayerId !== playerId || !item) return [];
+        const from = gift.anonymous
+          ? undefined
+          : playerById.get(gift.fromPlayerId);
+        return [{ gift, item, ...(from && { from }) }];
+      });
+  }
+
   return {
     shopItems: coins.items,
     getCrateViews,
@@ -787,9 +1299,22 @@ export function createCoinQueries(data: CompetitionData) {
     getGiftPanel,
     getWishPanel,
     getPowerUpWeek,
-    getSabotageTargets,
+    getPowerUpTargets,
+    getCopyable,
     getPowerUpBlock,
     getPowerUpPanel,
     getUnlockedHint,
+    getAvatarFrame,
+    getShellPrompts,
+    getShopDeal,
+    getBundleViews,
+    getBundleBlock,
+    getShopBundleById,
+    getRafflePanel,
+    getRenamePanel,
+    getGiftWrapPanel,
+    getGiftWrapBlock,
+    getWrappedGiftsFor,
+    hasHad,
   };
 }

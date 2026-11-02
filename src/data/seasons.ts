@@ -181,5 +181,11 @@ export function rowsForSeason(
     bountyClaimRows: rows.bountyClaimRows.filter((row) =>
       bountyIds.has(row.bountyId),
     ),
+    // Shop extras: raffle tickets on its weeks, and its players' rename
+    // tokens, gift-wrapped items and bundles. Bundles and deals are site-wide.
+    raffleTicketRows: bySeasonPlayers(rows.raffleTicketRows),
+    renameTokenRows: forPlayers(rows.renameTokenRows),
+    wrappedGiftRows: inSeason(rows.wrappedGiftRows),
+    bundlePurchaseRows: forPlayers(rows.bundlePurchaseRows),
   };
 }

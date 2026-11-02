@@ -106,6 +106,15 @@ export function timestamptzToIso(timestamp: string): string {
   ).toISOString();
 }
 
+/** The Monday (UK) of the week `iso` falls in, as `YYYY-MM-DD`. */
+export function ukWeekStart(iso: string): string {
+  const [date] = toWallClock(new Date(iso)).split(" ");
+  const [y, m, d] = date.split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  return day.toISOString().slice(0, 10);
+}
+
 /** An instant → zone-less UK wall-clock timestamp, as Postgres stores it. */
 export function toWallClock(date: Date): string {
   const w = wallClockAt(date.getTime());

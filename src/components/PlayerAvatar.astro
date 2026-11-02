@@ -1,6 +1,7 @@
 ---
 import type { Player } from "../types";
 import { assetUrl } from "../lib/url";
+import { AVATAR_FRAME_INFO } from "../lib/coin-ui";
 
 interface Props {
   player: Pick<Player, "id" | "name" | "avatarUrl"> &
@@ -12,10 +13,14 @@ interface Props {
 const { player, class: className = "h-9 w-9 rounded" } = Astro.props;
 
 // Icons are dealt out per season's roster, so use the player's own season.
-const { getPlayerIcon } = await Astro.locals.getQueries(player.seasonId);
+const { getPlayerIcon, getAvatarFrame } = await Astro.locals.getQueries(
+  player.seasonId,
+);
 
 // Decorative: the player's name is always rendered alongside the avatar.
 const src = assetUrl(getPlayerIcon(player));
+// An avatar frame cosmetic, if they wear one.
+const frame = getAvatarFrame(player.id);
 ---
 
 <img
@@ -28,6 +33,7 @@ const src = assetUrl(getPlayerIcon(player));
   height="64"
   class:list={[
     "shrink-0 border border-grid bg-term-bg object-cover",
+    frame && AVATAR_FRAME_INFO[frame].class,
     className,
   ]}
 />

@@ -239,6 +239,20 @@
       "when": 1793615978344,
       "tag": "0033_bounties",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793621058494,
+      "tag": "0034_shop_extras",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1793633608369,
+      "tag": "0035_skill_tree_titles",
+      "breakpoints": true
     }
   ]
 }

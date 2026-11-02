@@ -9,7 +9,16 @@ import type {
 } from "../types";
 import { withBase } from "../lib/url";
 import { ukDateFormat } from "../lib/time";
-import { SABOTAGE_POINTS, getCrate } from "./coin-rules";
+import {
+  HEIST_POINTS,
+  SABOTAGE_POINTS,
+  appliedEffect,
+  getCrate,
+} from "./coin-rules";
+
+/** "Sabotage" or "Heist", for a use that attacked someone's points. */
+const attackLabel = (use: PowerUpFeedEntry) =>
+  appliedEffect(use) === "heist" ? "Heist" : "Sabotage";
 import { listingExpiry, listingStatus } from "./market-mappers";
 
 const weekLabel = (weekNumber: number) =>
@@ -207,16 +216,28 @@ export function createNotificationQueries(
           if (Number.isNaN(time) || time > now) return [];
           const task = taskById.get(use.taskId);
           const kind: NotificationKind = "sabotaged";
+          const effect = appliedEffect(use);
+          const missed =
+            use.outcome === "blocked" || use.outcome === "reflected";
           return [
             {
               id: `sabotage:${use.id}`,
               kind,
-              title: `${use.player.name} sabotaged you`,
+              title:
+                effect === "freeze"
+                  ? `${use.player.name} froze you`
+                  : effect === "heist"
+                    ? `${use.player.name} pulled a Heist on you`
+                    : `${use.player.name} sabotaged you`,
               detail: [
                 // Once results are out, a Shield or Mirror shows it missed.
-                use.outcome === "blocked" || use.outcome === "reflected"
-                  ? "no points lost"
-                  : `${plural(-SABOTAGE_POINTS, "point")} lost`,
+                effect === "freeze"
+                  ? "no power-ups for you this week"
+                  : missed
+                    ? "no points lost"
+                    : effect === "heist"
+                      ? `${plural(HEIST_POINTS, "point")} stolen`
+                      : `${plural(-SABOTAGE_POINTS, "point")} lost`,
                 ...(task ? [weekLabel(task.weekNumber)] : []),
               ].join(" · "),
               href: withBase(
@@ -247,8 +268,8 @@ export function createNotificationQueries(
                 kind: "shielded",
                 title:
                   use.outcome === "blocked"
-                    ? `Your Shield blocked ${use.player.name}'s Sabotage`
-                    : `Your Mirror bounced ${use.player.name}'s Sabotage back`,
+                    ? `Your Shield blocked ${use.player.name}'s ${attackLabel(use)}`
+                    : `Your Mirror bounced ${use.player.name}'s ${attackLabel(use)} back`,
                 detail: [
                   "no points lost",
                   ...(task ? [weekLabel(task.weekNumber)] : []),
@@ -266,9 +287,14 @@ export function createNotificationQueries(
               {
                 id: `reflected:${use.id}`,
                 kind: "reflected",
-                title: `Your Sabotage bounced off ${use.target?.name ?? "your target"}'s Mirror`,
+                title: `Your ${attackLabel(use)} bounced off ${use.target?.name ?? "your target"}'s Mirror`,
                 detail: [
-                  `${plural(-SABOTAGE_POINTS, "point")} lost`,
+                  `${plural(
+                    appliedEffect(use) === "heist"
+                      ? HEIST_POINTS
+                      : -SABOTAGE_POINTS,
+                    "point",
+                  )} lost`,
                   ...(task ? [weekLabel(task.weekNumber)] : []),
                 ].join(" · "),
                 href: withBase(`/tasks/${use.taskId}#power-ups`),
@@ -300,6 +326,48 @@ export function createNotificationQueries(
 
     // Coins, items and eggs an admin gave the player (deductions aren't gifts).
     const itemNames = new Map(data.coins.items.map((i) => [i.id, i.name]));
+
+    // Gift-wrapped items, and weekly raffles the player won.
+    const extras: FeedEvent[] = playerId
+      ? [
+          ...data.coins.wrappedGifts.flatMap((gift): FeedEvent[] => {
+            if (gift.toPlayerId !== playerId) return [];
+            const time = new Date(gift.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            const from = gift.anonymous
+              ? "A secret admirer"
+              : (playerName.get(gift.fromPlayerId) ?? "Someone");
+            return [
+              {
+                id: `wrapped:${gift.id}`,
+                kind: "gift-received",
+                title: `${from} gift-wrapped you ${itemNames.get(gift.itemId) ?? "something"}`,
+                ...(gift.message && { detail: `"${gift.message}"` }),
+                href: withBase("/account#inventory"),
+                at: gift.at,
+                time,
+              },
+            ];
+          }),
+          ...data.coins.raffle.draws.flatMap((draw): FeedEvent[] => {
+            if (draw.winnerId !== playerId) return [];
+            const time = new Date(draw.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            const task = taskById.get(draw.taskId);
+            return [
+              {
+                id: `raffle:${draw.taskId}`,
+                kind: "gift-received",
+                title: `You won the ${task ? `${weekLabel(task.weekNumber)} ` : ""}raffle`,
+                detail: `${draw.pot} Clim Coin pot · ${plural(draw.tickets, "ticket")} in the draw`,
+                href: withBase("/account#history"),
+                at: draw.at,
+                time,
+              },
+            ];
+          }),
+        ]
+      : [];
     const adminGifts: FeedEvent[] = playerId
       ? [
           ...data.coins.adjustments.flatMap((grant): FeedEvent[] => {
@@ -556,6 +624,7 @@ export function createNotificationQueries(
       ...results,
       ...adjustments,
       ...sabotages,
+      ...extras,
       ...defended,
       ...gifts,
       ...adminGifts,

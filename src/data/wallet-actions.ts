@@ -1,9 +1,10 @@
-import type { CoinOutcome, Season } from "../types";
+import type { CoinOutcome, PowerUpBlock, Season } from "../types";
 import type { WalletAction } from "../lib/account-forms";
 import { createQueries, type Queries } from "./queries";
 import { loadFreshPlayerCompetition } from "./competition";
 import { equipItem, makeWish, sendGift, unequipSlot, usePowerUp } from "./shop";
 import { slotOf } from "./coins";
+import { isTargetedPowerUp } from "./coin-rules";
 
 /**
  * Carries out a wallet action from the account page (equip, take off, use
@@ -59,23 +60,43 @@ export async function runWalletAction(
     return sent ? "gifted" : "invalid";
   }
 
-  const { getTaskById, getPowerUpBlock, getSabotageTargets } =
+  const { getTaskById, getPowerUpBlock, getPowerUpTargets } =
     createQueries(fresh);
   const task = getTaskById(action.taskId);
-  const blocked = getPowerUpBlock(playerId, task, action.effect);
-  if (blocked) return blocked;
+  const blocked = getPowerUpBlock(
+    playerId,
+    task,
+    action.effect,
+    action.copiedEffect ?? undefined,
+  );
+  if (blocked) return BLOCK_OUTCOME[blocked];
+  const applied = action.copiedEffect ?? action.effect;
   if (
     action.targetPlayerId !== null &&
-    !getSabotageTargets(playerId, action.taskId).some(
+    isTargetedPowerUp(applied) &&
+    !getPowerUpTargets(playerId, action.taskId)[applied].some(
       (p) => p.id === action.targetPlayerId,
     )
   ) {
-    return "already-sabotaged";
+    return applied === "freeze" ? "target-used" : "already-sabotaged";
   }
   return usePowerUp(
     playerId,
     action.taskId,
     action.effect,
+    action.copiedEffect,
     action.targetPlayerId,
   );
 }
+
+const BLOCK_OUTCOME: Record<PowerUpBlock, CoinOutcome> = {
+  "no-charge": "no-charge",
+  "not-live": "not-live",
+  "already-used": "already-used",
+  "no-prediction": "no-prediction",
+  "no-hint": "no-hint",
+  "season-closed": "season-closed",
+  frozen: "frozen",
+  "nothing-to-copy": "invalid",
+  "no-targets": "already-sabotaged",
+};

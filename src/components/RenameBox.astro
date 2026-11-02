@@ -1,0 +1,102 @@
+---
+// Rename tokens in the shop: buy one (any number of times), then spend one
+// giving a pet you own a custom name. Both POST to `/account/shop-extras`.
+import type { RenamePanel } from "../types";
+import TerminalWindow from "./TerminalWindow.astro";
+import ShopItemArt from "./ShopItemArt.astro";
+import CoinAmount from "./CoinAmount.astro";
+import { PET_NAME_MAX } from "../data/coin-rules";
+import { RENAME_BLOCK_LABEL } from "../lib/coin-ui";
+import { btnGhost, btnPrimary, inputClass } from "./admin/styles";
+import { withBase } from "../lib/url";
+
+interface Props {
+  panel: RenamePanel;
+  class?: string;
+}
+
+const { panel, class: className } = Astro.props;
+const action = withBase("/account/shop-extras");
+---
+
+<TerminalWindow
+  title="~/extras/rename-token"
+  meta={`${panel.tokens} token${panel.tokens === 1 ? "" : "s"} held`}
+  class={className}
+>
+  <div id="rename" class="scroll-mt-24 space-y-4">
+    <p class="text-sm text-ink-dim">
+      <span class="text-amber">&gt;</span> A rename token gives one of your pets
+      a custom name (up to {PET_NAME_MAX} characters), shown wherever it appears.
+      Buy as many as you like; each one renames a pet once.
+    </p>
+    <div class="flex flex-wrap items-center gap-3">
+      <CoinAmount amount={panel.price} class="text-amber" />
+      <span class="text-xs text-ink-faint">per token</span>
+      {
+        panel.blocked ? (
+          <span class="text-xs text-ink-faint">
+            {RENAME_BLOCK_LABEL[panel.blocked]}
+          </span>
+        ) : (
+          <form method="post" action={action}>
+            <input type="hidden" name="intent" value="token" />
+            <button type="submit" class={btnPrimary}>
+              buy a token
+            </button>
+          </form>
+        )
+      }
+    </div>
+    {
+      panel.pets.length > 0 && (
+        <ul class="grid gap-3 sm:grid-cols-2">
+          {panel.pets.map(({ item, customName }) => (
+            <li class="flex flex-col gap-2 rounded-md border border-grid bg-term-bg/60 p-3">
+              <div class="flex items-center gap-3">
+                <ShopItemArt item={item} class="h-10 w-10" />
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-bold text-ink">
+                    {customName ?? item.name}
+                  </p>
+                  {customName && (
+                    <p class="truncate text-[11px] text-ink-faint">
+                      a.k.a. {item.name}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {panel.tokens > 0 && (
+                <form method="post" action={action} class="flex gap-2">
+                  <input type="hidden" name="intent" value="rename" />
+                  <input type="hidden" name="itemId" value={item.id} />
+                  <label class="min-w-0 flex-1">
+                    <span class="sr-only">New name for {item.name}</span>
+                    <input
+                      type="text"
+                      name="name"
+                      required
+                      maxlength={PET_NAME_MAX}
+                      placeholder={customName ?? item.name}
+                      class={inputClass(false)}
+                    />
+                  </label>
+                  <button type="submit" class={btnGhost}>
+                    rename
+                  </button>
+                </form>
+              )}
+            </li>
+          ))}
+        </ul>
+      )
+    }
+    {
+      !panel.blocked && panel.pets.length === 0 && (
+        <p class="text-xs text-ink-faint">
+          You don't have a pet to rename yet. Tokens keep until you do.
+        </p>
+      )
+    }
+  </div>
+</TerminalWindow>

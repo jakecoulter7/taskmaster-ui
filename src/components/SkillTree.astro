@@ -1,11 +1,18 @@
 ---
-// One skill pathway as a tree: its sigil and pitch, then its nodes tier by
-// tier (root → branches → capstone), joined by decorative connectors.
-import type { SkillPathView } from "../types";
+// One skill pathway as a tree: its sigil and pitch, then a map of its nodes
+// growing up from the root, joined by their prerequisites. Below the map,
+// a card per node; the script shows just the one picked on the map. Without
+// JS the map's nodes link to the cards, which are all listed.
+import type { SkillNodeView, SkillPathView } from "../types";
 import SkillNodeCard from "./SkillNodeCard.astro";
 import SkillSigil from "./SkillSigil.astro";
 import CoinAmount from "./CoinAmount.astro";
-import { SKILL_ACCENT_CLASS } from "../lib/skill-ui";
+import {
+  SKILL_ACCENT_CLASS,
+  SKILL_BLOCK_LABEL,
+  layoutSkillTree,
+  skillNodeRole,
+} from "../lib/skill-ui";
 
 interface Props {
   view: SkillPathView;
@@ -18,11 +25,41 @@ const { view, uncommitted, class: className } = Astro.props;
 const { path, chosen, tiers, unlockedCount, totalCost } = view;
 const accent = SKILL_ACCENT_CLASS[path.accent];
 const headingId = `path-${path.id}-heading`;
+
+const nodes = tiers.flat();
+const { points, edges, rows } = layoutSkillTree(nodes.map((n) => n.node));
+const viewById = new Map(nodes.map((n) => [n.node.id, n]));
+const unlocked = (id: string) => viewById.get(id)?.unlocked ?? false;
+
+type NodeState = "unlocked" | "open" | "locked";
+const stateOf = (n: SkillNodeView): NodeState =>
+  n.unlocked ? "unlocked" : n.blocked ? "locked" : "open";
+const STATE_CLASS: Record<NodeState, string[]> = {
+  unlocked: [accent.solid, accent.text],
+  open: ["border-dashed bg-term-bg", accent.border, accent.text],
+  locked: ["border-grid bg-term-bg text-ink-faint"],
+};
+const statusText = (n: SkillNodeView) =>
+  n.unlocked
+    ? "unlocked"
+    : n.blocked
+      ? SKILL_BLOCK_LABEL[n.blocked]
+      : "ready to unlock";
+
+// The card shown first: the next skill they can unlock, else the next one
+// in the tree, else the root.
+const selected = (
+  nodes.find((n) => !n.unlocked && !n.blocked) ??
+  nodes.find((n) => !n.unlocked && n.blocked !== "other-path") ??
+  nodes[0]
+)?.node.id;
 ---
 
 <section
   id={`path-${path.id}`}
   aria-labelledby={headingId}
+  data-skill-tree
+  data-selected={selected}
   class:list={[
     "flex min-w-0 scroll-mt-24 flex-col rounded-xl border bg-term-panel/60 p-4 sm:p-5",
     chosen
@@ -84,38 +121,146 @@ const headingId = `path-${path.id}-heading`;
     full tree: <CoinAmount amount={totalCost} class="text-amber" />
   </p>
 
-  <ol class="mt-4 flex flex-col text-ink" aria-label={`${path.name} skills`}>
-    {
-      tiers.map((tier, index) => (
-        <li class="flex flex-col items-stretch">
-          {index > 0 && (
-            <span
-              aria-hidden="true"
+  <div
+    class="relative mt-4 rounded-lg border border-grid bg-term-bg/60"
+    style={`height: ${rows * 5.5}rem`}
+  >
+    <div class="absolute inset-x-12 top-9 bottom-12 sm:inset-x-16">
+      <svg
+        class="absolute inset-0 h-full w-full overflow-visible"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        {
+          edges.map(({ from, to }) => (
+            <line
+              x1={points[from].x}
+              y1={points[from].y}
+              x2={points[to].x}
+              y2={points[to].y}
+              vector-effect="non-scaling-stroke"
+              stroke-width="2"
+              stroke-linecap="round"
               class:list={[
-                "mx-auto h-4 w-px",
-                tier.some((n) => n.unlocked) ? "bg-current" : "bg-grid",
-                accent.text,
+                unlocked(from) && unlocked(to) ? accent.stroke : "stroke-grid",
               ]}
             />
-          )}
-          <ul
-            class:list={[
-              "grid gap-3",
-              tier.length > 1 ? "sm:grid-cols-2" : "mx-auto w-full sm:w-2/3",
-            ]}
-          >
-            {tier.map((node) => (
-              <li>
-                <SkillNodeCard
-                  view={node}
-                  path={path}
-                  commits={uncommitted && node.node.tier === 1}
-                />
+          ))
+        }
+      </svg>
+      <ol aria-label={`${path.name} skill tree map`}>
+        {
+          nodes.map((n) => {
+            const { node } = n;
+            const point = points[node.id];
+            const capstone = skillNodeRole(node) === "capstone";
+            return (
+              <li
+                class="absolute"
+                style={`left: ${point.x}%; top: ${point.y}%`}
+              >
+                <a
+                  href={`#node-${node.id}`}
+                  data-skill-node={node.id}
+                  aria-label={`${node.name}: ${statusText(n)}, ${node.price} coins${node.rewardItemId ? ", with a reward" : ""}`}
+                  class:list={[
+                    "group absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-xs font-bold tabular-nums transition-colors",
+                    "hover:border-ink-faint aria-[current=true]:ring-2 aria-[current=true]:ring-ink/70 aria-[current=true]:ring-offset-2 aria-[current=true]:ring-offset-term-bg",
+                    capstone ? "h-14 w-14 text-sm" : "h-11 w-11",
+                    STATE_CLASS[stateOf(n)],
+                  ]}
+                >
+                  <span aria-hidden="true">{n.unlocked ? "✓" : node.price}</span>
+                  {node.rewardItemId && (
+                    <span
+                      aria-hidden="true"
+                      class="absolute -right-1 -top-1 text-[11px] leading-none text-magenta"
+                    >
+                      ★
+                    </span>
+                  )}
+                  <span
+                    aria-hidden="true"
+                    class:list={[
+                      "pointer-events-none absolute left-1/2 top-full mt-1 w-max max-w-24 -translate-x-1/2 rounded bg-term-bg/90 px-1 text-center text-[10px] font-normal leading-tight",
+                      n.unlocked ? accent.text : "text-ink-dim group-hover:text-ink",
+                    ]}
+                  >
+                    {node.name}
+                  </span>
+                </a>
               </li>
-            ))}
-          </ul>
+            );
+          })
+        }
+      </ol>
+    </div>
+  </div>
+  <p class="mt-2 text-[10px] text-ink-faint" aria-hidden="true">
+    ✓ unlocked · dashed = ready to unlock · numbers are prices ·{" "}
+    <span class="text-magenta">★</span> reward
+  </p>
+
+  <ol
+    data-skill-cards
+    class="mt-4 grid gap-3 text-ink sm:grid-cols-2 sm:data-enhanced:grid-cols-1"
+    aria-label={`${path.name} skills`}
+  >
+    {
+      nodes.map((n) => (
+        <li data-skill-card={n.node.id}>
+          <SkillNodeCard
+            view={n}
+            path={path}
+            commits={uncommitted && n.node.tier === 1}
+          />
         </li>
       ))
     }
   </ol>
 </section>
+
+<script>
+  // Shows one node's card at a time, picked on the map. Lands on the node
+  // in the URL hash (unlocking redirects back to `#node-<id>`).
+  for (const tree of document.querySelectorAll<HTMLElement>(
+    "[data-skill-tree]",
+  )) {
+    const links = [
+      ...tree.querySelectorAll<HTMLAnchorElement>("[data-skill-node]"),
+    ];
+    const cards = [...tree.querySelectorAll<HTMLElement>("[data-skill-card]")];
+    const list = tree.querySelector<HTMLElement>("[data-skill-cards]");
+    if (!list || links.length === 0) continue;
+
+    const select = (id: string) => {
+      for (const link of links) {
+        if (link.dataset.skillNode === id) {
+          link.setAttribute("aria-current", "true");
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      }
+      for (const card of cards) card.hidden = card.dataset.skillCard !== id;
+    };
+
+    list.dataset.enhanced = "";
+    const fromHash = links.find((link) => link.hash === location.hash);
+    select(
+      fromHash?.dataset.skillNode ??
+        tree.dataset.selected ??
+        links[0].dataset.skillNode ??
+        "",
+    );
+    if (fromHash) tree.scrollIntoView({ block: "start" });
+
+    for (const link of links) {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        select(link.dataset.skillNode ?? "");
+        history.replaceState(null, "", link.hash);
+      });
+    }
+  }
+</script>

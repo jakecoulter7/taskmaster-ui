@@ -1,8 +1,9 @@
 ---
 // The power-ups used on a week, public as soon as they're used (so a
-// Sabotage always names its saboteur). Oldest first. Once the week's
-// results are out, a Sabotage a Shield blocked or a Mirror bounced says so.
-import type { ActivePowerUpKind, PowerUpFeedEntry } from "../types";
+// Sabotage or Heist always names who did it). Oldest first. Once the week's
+// results are out, one a Shield blocked or a Mirror bounced says so.
+import type { PowerUpFeedEntry } from "../types";
+import { POWER_UP_GLYPH } from "../lib/coin-ui";
 import { withBase } from "../lib/url";
 
 interface Props {
@@ -11,14 +12,6 @@ interface Props {
 }
 
 const { entries, class: className } = Astro.props;
-
-const effectStyle: Record<ActivePowerUpKind, { glyph: string; class: string }> =
-  {
-    double_down: { glyph: "×2", class: "text-cyan" },
-    hint: { glyph: "?", class: "text-acid" },
-    golden_week: { glyph: "★", class: "text-amber" },
-    sabotage: { glyph: "☠", class: "text-danger" },
-  };
 ---
 
 <ul class:list={["space-y-2 text-sm", className]}>
@@ -29,10 +22,10 @@ const effectStyle: Record<ActivePowerUpKind, { glyph: string; class: string }> =
           aria-hidden="true"
           class:list={[
             "w-6 shrink-0 text-center font-extrabold",
-            effectStyle[entry.effect].class,
+            POWER_UP_GLYPH[entry.copiedEffect ?? entry.effect].class,
           ]}
         >
-          {effectStyle[entry.effect].glyph}
+          {POWER_UP_GLYPH[entry.copiedEffect ?? entry.effect].glyph}
         </span>
         <span class="text-ink-dim">
           <a

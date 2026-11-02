@@ -309,6 +309,7 @@ describe("parseWalletAction", () => {
     ).toEqual({
       intent: "use",
       effect: "sabotage",
+      copiedEffect: null,
       taskId: "w2",
       targetPlayerId: "bob",
     });
@@ -320,6 +321,41 @@ describe("parseWalletAction", () => {
       effect: "hint",
       targetPlayerId: null,
     });
+    for (const effect of ["heist", "freeze", "spyglass"]) {
+      expect(parse({ ...use, effect })).toBeUndefined();
+      expect(parse({ ...use, effect, targetPlayerId: "bob" })).toMatchObject({
+        effect,
+        targetPlayerId: "bob",
+      });
+    }
+    expect(parse({ ...use, effect: "coin_rush" })).toMatchObject({
+      effect: "coin_rush",
+      targetPlayerId: null,
+    });
+  });
+
+  it("needs a copy for Copycat, and a target when it copies a targeted one", () => {
+    const use = { intent: "use", taskId: "w2", effect: "copycat" };
+    expect(parse(use)).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "copycat" })).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "shield" })).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "golden_week" })).toMatchObject({
+      effect: "copycat",
+      copiedEffect: "golden_week",
+      targetPlayerId: null,
+    });
+    expect(parse({ ...use, copiedEffect: "heist" })).toBeUndefined();
+    expect(
+      parse({ ...use, copiedEffect: "heist", targetPlayerId: "bob" }),
+    ).toMatchObject({ copiedEffect: "heist", targetPlayerId: "bob" });
+    expect(
+      parse({
+        intent: "use",
+        taskId: "w2",
+        effect: "hint",
+        copiedEffect: "hint",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects unknown intents and effects", () => {
