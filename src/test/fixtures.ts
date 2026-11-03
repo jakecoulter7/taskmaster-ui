@@ -230,6 +230,7 @@ export function competitionData(
       shop_bundles: false,
       shop_raffle: false,
       shop_gift_wrap: false,
+      daily_bonus: false,
     },
     ...overrides,
   };
@@ -253,6 +254,8 @@ export function coinData(overrides: Partial<ClimCoinData> = {}): ClimCoinData {
     skillUnlocks: [],
     miniTasks: [],
     miniTaskCompletions: [],
+    dailyBonusRewards: [],
+    dailyBonusClaims: [],
     market: { listings: [], offers: [], sales: [] },
     bounties: { bounties: [], claims: [] },
     raffle: { tickets: [], draws: [] },

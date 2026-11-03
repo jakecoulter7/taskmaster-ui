@@ -1617,7 +1617,8 @@ export type FeatureFlagKey =
   | "shop_deals"
   | "shop_bundles"
   | "shop_raffle"
-  | "shop_gift_wrap";
+  | "shop_gift_wrap"
+  | "daily_bonus";
 
 /** Whether each feature is on. */
 export type FeatureFlags = Record<FeatureFlagKey, boolean>;
@@ -2085,6 +2086,10 @@ export interface ClimCoinData {
   miniTasks: MiniTask[];
   /** Who completed which mini-task, oldest first. */
   miniTaskCompletions: MiniTaskCompletion[];
+  /** This season's daily bonus schedule, days 1–7 (defaults filled in). */
+  dailyBonusRewards: DailyBonusReward[];
+  /** Daily bonuses this season's players claimed, oldest first. */
+  dailyBonusClaims: DailyBonusClaim[];
   /** The player-to-player marketplace, this season's rows, oldest first. */
   market: MarketData;
   /** Bounties this season's players posted, and their claims. */
@@ -2304,6 +2309,7 @@ export type EconomySource =
   | "entries"
   | "votes"
   | "mini-tasks"
+  | "daily-bonus"
   | "skill-perks"
   | "power-ups"
   | "grants"
@@ -2549,6 +2555,8 @@ export type CoinLedgerKind =
   | "skill-perk"
   /** A mini-task an admin marked as completed. */
   | "mini-task"
+  /** A daily sign-in bonus claimed. */
+  | "daily-bonus"
   /** Coins from selling an item on the marketplace. */
   | "market-sale"
   /** Coins spent buying an item on the marketplace. */
@@ -3205,6 +3213,72 @@ export interface MiniTaskBoard {
   coinsEarned: number;
 }
 
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+/** What one day of the 7-day daily bonus cycle pays. */
+export interface DailyBonusReward {
+  /** Position in the streak cycle (1–7). */
+  day: number;
+  coins: number;
+  /** A shop item given with the coins (swapped for coins if owned). */
+  itemId?: string;
+  /** A mystery egg (crate id) given with the coins. */
+  crateId?: string;
+}
+
+/** A daily bonus a player claimed. */
+export interface DailyBonusClaim {
+  id: number;
+  playerId: string;
+  /** The UK date it was claimed for (YYYY-MM-DD). */
+  claimedOn: string;
+  /** Where it fell in the streak cycle (1–7). */
+  day: number;
+  /** Coins it paid, including any swap for an item already owned. */
+  coins: number;
+  /** The item gift it gave, if any (unset once revoked). */
+  itemGiftId?: number;
+  /** The egg gift it gave, if any (unset once revoked). */
+  eggGiftId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** Where a player's streak stands today. */
+export interface DailyBonusStreak {
+  /** The cycle day today's claim is (or was), 1–7. */
+  day: number;
+  claimedToday: boolean;
+  /** Consecutive days claimed up to today (0 once broken). */
+  streak: number;
+}
+
+/** One day of the cycle as a player sees it. */
+export interface DailyBonusDayView {
+  reward: DailyBonusReward;
+  item?: ShopItem;
+  crate?: Crate;
+  state: "claimed" | "today" | "upcoming";
+}
+
+/** The daily bonus panel on a player's account page. */
+export interface DailyBonusPanel {
+  streak: DailyBonusStreak;
+  /** Days 1–7 of the cycle. */
+  days: DailyBonusDayView[];
+  /** What today's claim gave, once claimed. */
+  claimed?: { coins: number; item?: ShopItem; crate?: Crate };
+  blocked?: "season-closed";
+}
+
+/** Outcome of claiming the daily bonus, shown after the redirect. */
+export type DailyBonusOutcome =
+  | "claimed"
+  | "already-claimed"
+  | "season-closed"
+  | "disabled"
+  | "invalid";
+
 // ── Admin activity log ────────────────────────────────────────────────
 
 /** The kinds of change the admin activity log lists. */
@@ -3213,6 +3287,7 @@ export type ActivityKind =
   | "coin-adjustment"
   | "item-gift"
   | "mini-task"
+  | "daily-bonus"
   | "purchase"
   | "crate"
   | "gift"

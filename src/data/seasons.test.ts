@@ -162,6 +162,8 @@ describe("rowsForSeason", () => {
     shopBundleRows: [],
     shopBundleItemRows: [],
     shopDealRows: [],
+    dailyBonusRewardRows: [],
+    dailyBonusClaimRows: [],
   };
   const player = (id: string, seasonId: string) => ({
     id,

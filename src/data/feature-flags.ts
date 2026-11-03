@@ -68,6 +68,11 @@ export const FEATURE_FLAGS: Record<
     label: "Gift wrap",
     description: `Adds gift wrap to the shop's extras tab: players buy a pet, avatar or cosmetic for someone else in their season (who doesn't have it) for its price plus a ${GIFT_WRAP_FEE}-coin fee, with an optional note and anonymous sender. Off: gift wrap is hidden and can't be used; gifts already sent stay put.`,
   },
+  daily_bonus: {
+    label: "Daily sign-in bonus",
+    description:
+      "Adds a daily bonus to players' accounts: claim once a day (UK time) on a 7-day streak for the coins, items and eggs set in /admin/site#daily-bonus. Missing a day starts the streak again at day 1. Off: the panel is hidden and nobody can claim; rewards already claimed stay put.",
+  },
 };
 
 export const FEATURE_FLAG_KEYS = Object.keys(FEATURE_FLAGS) as FeatureFlagKey[];

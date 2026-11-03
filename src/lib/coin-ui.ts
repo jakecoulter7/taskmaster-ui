@@ -6,6 +6,7 @@ import type {
   CoinOutcome,
   CrateBlock,
   CrateTierKind,
+  DailyBonusOutcome,
   GiftBlock,
   GiftWrapBlock,
   NameColour,
@@ -285,6 +286,36 @@ export function timeLeftLabel(until: string, now: number = Date.now()): string {
 }
 
 const OUTCOMES = new Set(Object.keys(COIN_OUTCOME_NOTICE));
+
+/** The notice shown after claiming the daily bonus redirects back. */
+export const DAILY_BONUS_OUTCOME_NOTICE: Record<
+  DailyBonusOutcome,
+  { tone: "success" | "error"; message: string }
+> = {
+  claimed: {
+    tone: "success",
+    message: "Daily bonus claimed. See you tomorrow!",
+  },
+  "already-claimed": {
+    tone: "error",
+    message: "You've already claimed today's bonus. Come back tomorrow.",
+  },
+  "season-closed": {
+    tone: "error",
+    message: "This season is closed, so its wallets are frozen.",
+  },
+  disabled: { tone: "error", message: "The daily bonus isn't on right now." },
+  invalid: { tone: "error", message: "That didn't work. Try again." },
+};
+
+/** The outcome named in a `?daily=` param, if it's a real one. */
+export function parseDailyBonusOutcome(
+  value: string | null,
+): DailyBonusOutcome | undefined {
+  return value && Object.hasOwn(DAILY_BONUS_OUTCOME_NOTICE, value)
+    ? (value as DailyBonusOutcome)
+    : undefined;
+}
 
 /** The outcome named in a `?coins=` param, if it's a real one. */
 export function parseCoinOutcome(

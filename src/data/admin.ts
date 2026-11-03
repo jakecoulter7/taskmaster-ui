@@ -19,6 +19,8 @@ import {
   coinAdjustments,
   coinPurchases,
   crateOpens,
+  dailyBonusClaims,
+  dailyBonusRewards,
   eggGifts,
   equippedItems,
   featureFlags,
@@ -58,6 +60,7 @@ import type { BatchItem } from "drizzle-orm/batch";
 import type {
   AdminUser,
   AdminWish,
+  DailyBonusReward,
   FeatureFlagKey,
   FeatureFlagView,
   Page,
@@ -68,6 +71,7 @@ import type {
 } from "../types";
 import { EMPTY_WEEK_COUNTS } from "./week-progress";
 import { featureFlagViews } from "./feature-flags";
+import { mapDailyBonusRewards } from "./daily-bonus";
 import { lockWallet } from "./shop";
 import { timestamptzToIso } from "../lib/time";
 import { LIST_PAGE_SIZE, pageInfo } from "../lib/pagination";
@@ -1949,7 +1953,74 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
     "Skill tree rewards can't be egg exclusives.",
   crate_opens_item_id_shop_items_id_fk:
     "Players hatched this item from an egg, so it can't be deleted. Retire it instead.",
+  daily_bonus_rewards_item_id_shop_items_id_fk:
+    "That item is in a daily bonus schedule. Take it out of the schedule (or retire it) first.",
+  daily_bonus_rewards_season_id_seasons_id_fk:
+    "That season has a daily bonus schedule.",
+  daily_bonus_rewards_coins_range: "A day pays between 0 and 100 Clim Coin.",
+  daily_bonus_rewards_not_empty: "Every day needs coins, an item or an egg.",
 };
+
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+/**
+ * A season's daily bonus schedule (defaults for unset days), whether it's
+ * been customised, and how many bonuses have been claimed.
+ */
+export async function getDailyBonusSchedule(seasonId: string): Promise<{
+  rewards: DailyBonusReward[];
+  customised: boolean;
+  claims: number;
+}> {
+  const db = getDb();
+  const [rows, [claimed]] = await db.batch([
+    db
+      .select()
+      .from(dailyBonusRewards)
+      .where(eq(dailyBonusRewards.seasonId, seasonId)),
+    db
+      .select({ n: count() })
+      .from(dailyBonusClaims)
+      .where(eq(dailyBonusClaims.seasonId, seasonId)),
+  ]);
+  return {
+    rewards: mapDailyBonusRewards(rows),
+    customised: rows.length > 0,
+    claims: claimed?.n ?? 0,
+  };
+}
+
+/**
+ * Replaces a season's daily bonus schedule, one row per day, in one
+ * transaction. Claims already made keep what they paid.
+ */
+export async function setDailyBonusSchedule(
+  seasonId: string,
+  rewards: readonly DailyBonusReward[],
+): Promise<void> {
+  const db = getDb();
+  await db.batch([
+    db
+      .delete(dailyBonusRewards)
+      .where(eq(dailyBonusRewards.seasonId, seasonId)),
+    db.insert(dailyBonusRewards).values(
+      rewards.map((r) => ({
+        seasonId,
+        day: r.day,
+        coins: r.coins,
+        itemId: r.itemId ?? null,
+        crateId: r.crateId ?? null,
+      })),
+    ),
+  ]);
+}
+
+/** Puts a season's daily bonus back on the default schedule. */
+export async function resetDailyBonusSchedule(seasonId: string): Promise<void> {
+  await getDb()
+    .delete(dailyBonusRewards)
+    .where(eq(dailyBonusRewards.seasonId, seasonId));
+}
 
 // ── Mini-tasks ────────────────────────────────────────────────────────
 

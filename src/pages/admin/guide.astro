@@ -516,6 +516,30 @@ const link = "text-cyan hover:underline";
           </li>
         </ul>
       </TerminalWindow>
+      <TerminalWindow title="~/guide/daily-bonus" class="lg:col-span-2">
+        <ul class="space-y-2 text-sm text-ink-dim">
+          <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span> Players claim a
+            daily sign-in bonus from their account, once a day (UK time), on a
+            7-day streak. Missing a day starts them again at day 1; after day 7
+            it repeats. Turn on the{" "}
+            <span class="text-ink">daily sign-in bonus</span> flag to open it.
+          </li>
+          <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span>{" "}
+            <span class="text-ink">edit schedule</span> in{" "}
+            <a href={withBase("/admin/site#daily-bonus")} class={link}>site</a>{" "}
+            sets what each day pays this season: coins, plus one shop item or
+            mystery egg. An item a player already owns is swapped for coins.
+            Until you save one, a small coins-only default applies.
+          </li>
+          <li>
+            <span class="text-cyan" aria-hidden="true">&gt;</span> Claims show in
+            the activity log. Items and eggs arrive as gifts from "Daily bonus"
+            on the player's page, where they can be taken back like any gift.
+          </li>
+        </ul>
+      </TerminalWindow>
       <TerminalWindow title="~/guide/changelog">
         <ul class="space-y-2 text-sm text-ink-dim">
           <li>

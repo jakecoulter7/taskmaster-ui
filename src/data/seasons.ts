@@ -187,5 +187,7 @@ export function rowsForSeason(
     renameTokenRows: forPlayers(rows.renameTokenRows),
     wrappedGiftRows: inSeason(rows.wrappedGiftRows),
     bundlePurchaseRows: forPlayers(rows.bundlePurchaseRows),
+    dailyBonusRewardRows: inSeason(rows.dailyBonusRewardRows),
+    dailyBonusClaimRows: inSeason(rows.dailyBonusClaimRows),
   };
 }

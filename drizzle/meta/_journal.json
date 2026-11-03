@@ -253,6 +253,13 @@
       "when": 1793633608369,
       "tag": "0035_skill_tree_titles",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1793701201825,
+      "tag": "0036_daily_bonus",
+      "breakpoints": true
     }
   ]
 }

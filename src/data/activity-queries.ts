@@ -22,6 +22,7 @@ export const ACTIVITY_KINDS: Record<ActivityKind, string> = {
   "coin-adjustment": "coin grants",
   "item-gift": "item gifts",
   "mini-task": "mini-tasks",
+  "daily-bonus": "daily bonuses",
   purchase: "purchases",
   crate: "crates",
   gift: "player gifts",
@@ -139,6 +140,11 @@ export function createActivityQueries(data: CompetitionData) {
       });
     }
     const miniTasks = new Map(coins.miniTasks.map((t) => [t.id, t]));
+    const dailyItemGifts = new Set(
+      coins.dailyBonusClaims.map((c) => c.itemGiftId),
+    );
+    const itemGiftById = new Map(coins.itemGifts.map((g) => [g.id, g]));
+    const eggGiftById = new Map(coins.eggGifts.map((g) => [g.id, g]));
     return [
       ...coins.adjustments.map(
         (a): ActivityEntry => ({
@@ -156,19 +162,45 @@ export function createActivityQueries(data: CompetitionData) {
           href: playerHref(a.playerId),
         }),
       ),
-      ...coins.itemGifts.map(
-        (g): ActivityEntry => ({
-          id: `item-gift:${g.id}`,
-          kind: "item-gift",
-          at: g.at,
-          actor: g.actorName,
-          byAdmin: true,
-          subjectIds: [g.playerId],
-          summary: `Gifted ${itemOf(g.itemId)} to ${nameOf(g.playerId)}`,
-          detail: g.reason,
-          href: playerHref(g.playerId),
-        }),
-      ),
+      ...coins.itemGifts
+        .filter((g) => !dailyItemGifts.has(g.id))
+        .map(
+          (g): ActivityEntry => ({
+            id: `item-gift:${g.id}`,
+            kind: "item-gift",
+            at: g.at,
+            actor: g.actorName,
+            byAdmin: true,
+            subjectIds: [g.playerId],
+            summary: `Gifted ${itemOf(g.itemId)} to ${nameOf(g.playerId)}`,
+            detail: g.reason,
+            href: playerHref(g.playerId),
+          }),
+        ),
+      ...coins.dailyBonusClaims.map((c): ActivityEntry => {
+        const item =
+          c.itemGiftId === undefined
+            ? undefined
+            : itemGiftById.get(c.itemGiftId);
+        const egg =
+          c.eggGiftId === undefined ? undefined : eggGiftById.get(c.eggGiftId);
+        const extras = [
+          item && itemOf(item.itemId),
+          egg && (getCrate(egg.crateId)?.name ?? egg.crateId),
+        ].filter((x): x is string => Boolean(x));
+        return {
+          id: `daily-bonus:${c.id}`,
+          kind: "daily-bonus",
+          at: c.at,
+          actor: nameOf(c.playerId),
+          byAdmin: false,
+          subjectIds: [c.playerId],
+          summary: `${nameOf(c.playerId)} claimed their daily bonus (day ${c.day})`,
+          ...(extras.length > 0 && { detail: `+ ${extras.join(", ")}` }),
+          coins: c.coins,
+          href: playerHref(c.playerId),
+        };
+      }),
       ...coins.miniTaskCompletions.flatMap((done): ActivityEntry[] => {
         const task = miniTasks.get(done.miniTaskId);
         if (!task) return [];

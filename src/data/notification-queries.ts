@@ -368,6 +368,13 @@ export function createNotificationQueries(
           }),
         ]
       : [];
+    // A player claims their daily bonus themselves, so its gifts aren't news.
+    const dailyItemGifts = new Set(
+      data.coins.dailyBonusClaims.map((c) => c.itemGiftId),
+    );
+    const dailyEggGifts = new Set(
+      data.coins.dailyBonusClaims.map((c) => c.eggGiftId),
+    );
     const adminGifts: FeedEvent[] = playerId
       ? [
           ...data.coins.adjustments.flatMap((grant): FeedEvent[] => {
@@ -387,7 +394,9 @@ export function createNotificationQueries(
             ];
           }),
           ...data.coins.itemGifts.flatMap((gift): FeedEvent[] => {
-            if (gift.playerId !== playerId) return [];
+            if (gift.playerId !== playerId || dailyItemGifts.has(gift.id)) {
+              return [];
+            }
             const time = new Date(gift.at).getTime();
             if (Number.isNaN(time) || time > now) return [];
             return [
@@ -405,7 +414,9 @@ export function createNotificationQueries(
           // Gifted eggs wait in the inventory, so only while eggs are on.
           ...(data.features.shop_eggs ? data.coins.eggGifts : []).flatMap(
             (gift): FeedEvent[] => {
-              if (gift.playerId !== playerId) return [];
+              if (gift.playerId !== playerId || dailyEggGifts.has(gift.id)) {
+                return [];
+              }
               const time = new Date(gift.at).getTime();
               if (Number.isNaN(time) || time > now) return [];
               return [

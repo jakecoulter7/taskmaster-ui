@@ -18,6 +18,8 @@ import {
   coinGifts as coinGiftsTable,
   coinPurchases as coinPurchasesTable,
   crateOpens as crateOpensTable,
+  dailyBonusClaims as dailyBonusClaimsTable,
+  dailyBonusRewards as dailyBonusRewardsTable,
   eggGifts as eggGiftsTable,
   equippedItems as equippedItemsTable,
   featureFlags as featureFlagsTable,
@@ -90,6 +92,7 @@ import { mapFeatureFlags } from "./feature-flags";
 import { mapMarket } from "./market-mappers";
 import { mapBounties } from "./bounty-mappers";
 import { mapMiniTaskCompletions, mapMiniTasks } from "./mini-tasks";
+import { mapDailyBonusClaims, mapDailyBonusRewards } from "./daily-bonus";
 import {
   mapBundlePurchases,
   mapBundles,
@@ -386,6 +389,15 @@ export function seasonRowQueries(db: HttpDatabase, scope: SeasonScope) {
       .from(bundlePurchasesTable)
       .where(forPlayers(bundlePurchasesTable.playerId))
       .orderBy(asc(bundlePurchasesTable.id)),
+    db
+      .select()
+      .from(dailyBonusRewardsTable)
+      .where(inSeasons(dailyBonusRewardsTable.seasonId)),
+    db
+      .select()
+      .from(dailyBonusClaimsTable)
+      .where(inSeasons(dailyBonusClaimsTable.seasonId))
+      .orderBy(asc(dailyBonusClaimsTable.id)),
   ] as const;
 }
 
@@ -424,6 +436,8 @@ function nameSeasonRows([
   renameTokenRows,
   wrappedGiftRows,
   bundlePurchaseRows,
+  dailyBonusRewardRows,
+  dailyBonusClaimRows,
 ]: BatchResponse<ReturnType<typeof seasonRowQueries>>) {
   return {
     playerRows,
@@ -459,6 +473,8 @@ function nameSeasonRows([
     renameTokenRows,
     wrappedGiftRows,
     bundlePurchaseRows,
+    dailyBonusRewardRows,
+    dailyBonusClaimRows,
   };
 }
 
@@ -692,6 +708,8 @@ async function buildSeasonCompetition(
     shopBundleRows,
     shopBundleItemRows,
     shopDealRows,
+    dailyBonusRewardRows,
+    dailyBonusClaimRows,
   }: CompetitionRows,
   viewer: CompetitionViewer,
   season: Season,
@@ -830,6 +848,8 @@ async function buildSeasonCompetition(
       skillUnlocks: mapSkillUnlocks(skillUnlockRows),
       miniTasks: mapMiniTasks(miniTaskRows),
       miniTaskCompletions: mapMiniTaskCompletions(miniTaskCompletionRows),
+      dailyBonusRewards: mapDailyBonusRewards(dailyBonusRewardRows),
+      dailyBonusClaims: mapDailyBonusClaims(dailyBonusClaimRows),
       market: mapMarket(marketListingRows, marketOfferRows, marketSaleRows),
       bounties: mapBounties(bountyRows, bountyClaimRows),
       raffle: mapRaffle(raffleTicketRows, tasks),

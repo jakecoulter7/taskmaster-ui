@@ -49,6 +49,7 @@ import { timestamptzToIso, wallClockToIso } from "../lib/time";
 import { peoplesChoiceClosesAt } from "./peoples-choice";
 import { heldCoins } from "./market-mappers";
 import { bountyHeldCoins } from "./bounty-mappers";
+import { DAILY_BONUS_DAYS } from "./daily-bonus";
 import type { DerivedBonusRow } from "./polls";
 import {
   BOUNTY_BADGE_SHARE,
@@ -904,6 +905,25 @@ export function deriveEarnings(
     });
   }
 
+  const itemGiftById = new Map(data.coins.itemGifts.map((g) => [g.id, g]));
+  const eggGiftById = new Map(data.coins.eggGifts.map((g) => [g.id, g]));
+  const itemNameOf = new Map(data.coins.items.map((i) => [i.id, i.name]));
+  for (const claim of data.coins.dailyBonusClaims) {
+    if (claim.playerId !== playerId) continue;
+    const item = claim.itemGiftId && itemGiftById.get(claim.itemGiftId);
+    const egg = claim.eggGiftId && eggGiftById.get(claim.eggGiftId);
+    const extras = [
+      item ? (itemNameOf.get(item.itemId) ?? item.itemId) : undefined,
+      egg ? (getCrate(egg.crateId)?.name ?? "a mystery egg") : undefined,
+    ].filter(Boolean);
+    entries.push({
+      kind: "daily-bonus",
+      amount: claim.coins,
+      label: `Daily bonus: day ${claim.day} of ${DAILY_BONUS_DAYS}${extras.map((x) => ` + ${x}`).join("")}`,
+      at: claim.at,
+    });
+  }
+
   const names = new Map(data.players.map((p) => [p.id, p.name]));
   const badges = bountyBadgeClaims(data, playerId);
   const bountyById = new Map(
@@ -1226,8 +1246,13 @@ export function deriveWallet(
       return [];
     },
   );
+  // Items and eggs from a daily bonus are listed on its own line.
+  const fromDailyBonus = {
+    items: new Set(data.coins.dailyBonusClaims.map((c) => c.itemGiftId)),
+    eggs: new Set(data.coins.dailyBonusClaims.map((c) => c.eggGiftId)),
+  };
   const itemGifts: CoinLedgerEntry[] = data.coins.itemGifts
-    .filter((g) => g.playerId === playerId)
+    .filter((g) => g.playerId === playerId && !fromDailyBonus.items.has(g.id))
     .map((g) => ({
       kind: "item-gift",
       amount: 0,
@@ -1235,7 +1260,7 @@ export function deriveWallet(
       at: g.at,
     }));
   const eggGifts: CoinLedgerEntry[] = data.coins.eggGifts
-    .filter((g) => g.playerId === playerId)
+    .filter((g) => g.playerId === playerId && !fromDailyBonus.eggs.has(g.id))
     .map((g) => ({
       kind: "item-gift",
       amount: 0,

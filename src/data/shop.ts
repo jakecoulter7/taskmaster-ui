@@ -5,6 +5,7 @@ import type {
   CopyablePowerUpKind,
   Crate,
   CrateTierKind,
+  DailyBonusReward,
   LoadoutSlot,
 } from "../types";
 import { getDb } from "../db";
@@ -15,6 +16,7 @@ import {
   coinGifts,
   coinPurchases,
   crateOpens,
+  dailyBonusClaims,
   eggGifts,
   equippedItems,
   itemGifts,
@@ -487,6 +489,79 @@ export async function openCrate(
   ]);
   const id = (opened.rows[0] as { id?: number } | undefined)?.id;
   return typeof id === "number" ? id : undefined;
+}
+
+/** Who daily bonus item and egg gifts are recorded as given by. */
+export const DAILY_BONUS_ACTOR = {
+  id: "system:daily-bonus",
+  name: "Daily bonus",
+};
+
+/**
+ * Claims the player's daily bonus for UK date `today`: `reward` (the cycle
+ * day's, worked out by the caller from fresh rows). An item comes as an
+ * `item_gifts` row unless they already have it (or, for a power-up, its
+ * effect), when it's swapped for `swapCoins` more; an egg as an `egg_gifts`
+ * row. One statement under the wallet lock; the unique player/day key turns
+ * a second claim (a double-submit, another tab) into `false`.
+ */
+export async function claimDailyBonus(
+  playerId: string,
+  seasonId: string,
+  today: string,
+  reward: DailyBonusReward,
+  swapCoins: number,
+): Promise<boolean> {
+  const db = getDb();
+  const reason = `Daily bonus: day ${reward.day}`;
+  const itemId = reward.itemId ?? null;
+  const crateId = reward.crateId ?? null;
+  try {
+    const [, claimed] = await db.batch([
+      db.execute(lockWallet(playerId)),
+      db.execute(sql`
+        with given as (
+          insert into ${coinPurchases} (player_id, item_id, price)
+          select ${playerId}, item.id, 0
+          from ${shopItems} item
+          where item.id = ${itemId}::text
+            and not ${ownsItemOrEffect(playerId)}
+          returning id, item_id
+        ),
+        gift as (
+          insert into ${itemGifts}
+            (player_id, item_id, purchase_id, reason, actor_id, actor_name)
+          select ${playerId}, given.item_id, given.id, ${reason},
+            ${DAILY_BONUS_ACTOR.id}, ${DAILY_BONUS_ACTOR.name}
+          from given
+          returning id
+        ),
+        egg as (
+          insert into ${eggGifts}
+            (player_id, crate_id, reason, actor_id, actor_name)
+          select ${playerId}, ${crateId}::text, ${reason},
+            ${DAILY_BONUS_ACTOR.id}, ${DAILY_BONUS_ACTOR.name}
+          where ${crateId}::text is not null
+          returning id
+        )
+        insert into ${dailyBonusClaims}
+          (season_id, player_id, claimed_on, day, coins, item_gift_id,
+            egg_gift_id)
+        select ${seasonId}, ${playerId}, ${today}::date, ${reward.day}::integer,
+          ${reward.coins}::integer + case
+            when ${itemId}::text is not null and not exists (select 1 from gift)
+            then ${swapCoins}::integer else 0 end,
+          (select id from gift), (select id from egg)
+        returning id`),
+    ]);
+    return claimed.rows.length > 0;
+  } catch (error) {
+    const constraint = violatedConstraint(error);
+    if (constraint === "daily_bonus_claims_player_id_claimed_on_unique") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /**

@@ -1450,6 +1450,81 @@ export const miniTaskCompletions = pgTable(
   ],
 );
 
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+/**
+ * A season's daily bonus schedule: what each day of the 7-day streak cycle
+ * pays (coins, plus optionally one shop item or one mystery egg by crate id
+ * from `coin-rules.ts`). A day with no row falls back to the default in
+ * `src/data/daily-bonus.ts`.
+ */
+export const dailyBonusRewards = pgTable(
+  "daily_bonus_rewards",
+  {
+    seasonId: seasonId(),
+    day: integer().notNull(),
+    coins: integer().notNull().default(0),
+    itemId: text().references(() => shopItems.id, { onDelete: "restrict" }),
+    crateId: text(),
+    ...recordedTimestamps(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.seasonId, t.day] }),
+    check("daily_bonus_rewards_day_range", sql`${t.day} between 1 and 7`),
+    check("daily_bonus_rewards_coins_range", sql`${t.coins} between 0 and 100`),
+    check(
+      "daily_bonus_rewards_one_extra",
+      sql`${t.itemId} is null or ${t.crateId} is null`,
+    ),
+    check(
+      "daily_bonus_rewards_not_empty",
+      sql`${t.coins} > 0 or ${t.itemId} is not null or ${t.crateId} is not null`,
+    ),
+    index("daily_bonus_rewards_item_id_idx").on(t.itemId),
+  ],
+);
+
+/**
+ * A daily bonus a player claimed, at most once per UK day. `day` is where
+ * the claim fell in the streak cycle and `coins` what it paid (both copied
+ * in, so later schedule edits never rewrite a wallet). An item or egg it
+ * gave is an `item_gifts` / `egg_gifts` row, so ownership and cracking work
+ * like any gift.
+ */
+export const dailyBonusClaims = pgTable(
+  "daily_bonus_claims",
+  {
+    id: integer().primaryKey().generatedAlwaysAsIdentity(),
+    seasonId: seasonId(),
+    playerId: text().notNull(),
+    claimedOn: date({ mode: "string" }).notNull(),
+    day: integer().notNull(),
+    coins: integer().notNull(),
+    itemGiftId: integer()
+      .unique("daily_bonus_claims_item_gift_id_unique")
+      .references(() => itemGifts.id, { onDelete: "set null" }),
+    eggGiftId: integer()
+      .unique("daily_bonus_claims_egg_gift_id_unique")
+      .references(() => eggGifts.id, { onDelete: "set null" }),
+    createdAt: timestamp({ withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: "daily_bonus_claims_player_season_fk",
+      columns: [t.playerId, t.seasonId],
+      foreignColumns: [players.id, players.seasonId],
+    }).onDelete("cascade"),
+    unique("daily_bonus_claims_player_id_claimed_on_unique").on(
+      t.playerId,
+      t.claimedOn,
+    ),
+    check("daily_bonus_claims_day_range", sql`${t.day} between 1 and 7`),
+    check("daily_bonus_claims_coins_positive", sql`${t.coins} >= 0`),
+  ],
+);
+
 // ── Shop extras ───────────────────────────────────────────────────────
 
 /**

@@ -1,0 +1,153 @@
+---
+import type { DailyBonusDayView, DailyBonusPanel } from "../types";
+import TerminalWindow from "./TerminalWindow.astro";
+import CoinAmount from "./CoinAmount.astro";
+import Notice from "./admin/Notice.astro";
+import { btnPrimary } from "./admin/styles";
+import { withBase } from "../lib/url";
+
+interface Props {
+  panel: DailyBonusPanel;
+  /** The result of a claim, after its redirect. */
+  notice?: { tone: "success" | "error"; message: string } | undefined;
+  class?: string;
+}
+
+const { panel, notice, class: className = "" } = Astro.props;
+const { streak, days, claimed, blocked } = panel;
+
+const stateConfig: Record<
+  DailyBonusDayView["state"],
+  { label: string; badge: string; cell: string }
+> = {
+  claimed: {
+    label: "✓ CLAIMED",
+    badge: "text-acid",
+    cell: "border-acid/40 bg-acid/5",
+  },
+  today: {
+    label: "● TODAY",
+    badge: "text-amber",
+    cell: "border-amber/60 bg-amber/10",
+  },
+  upcoming: {
+    label: "LOCKED",
+    badge: "text-ink-faint",
+    cell: "border-grid bg-term-bg/40",
+  },
+};
+const extraName = (view: DailyBonusDayView) =>
+  view.item?.name ?? view.crate?.name;
+const lastDay = days.length;
+---
+
+<section
+  id="daily-bonus"
+  class:list={["scroll-mt-24", className]}
+  aria-labelledby="daily-bonus-heading"
+>
+  <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+    <h2
+      id="daily-bonus-heading"
+      class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      daily bonus
+    </h2>
+    <p class="text-xs text-ink-faint">
+      streak:{" "}
+      <span class="font-bold tabular-nums text-acid">{streak.streak}</span>
+      {streak.streak === 1 ? " day" : " days"}
+    </p>
+  </div>
+  {
+    notice && (
+      <Notice tone={notice.tone} class="mb-3">
+        {notice.message}
+      </Notice>
+    )
+  }
+  <TerminalWindow title="~/daily-bonus --streak" meta="resets at UK midnight">
+    <ol class="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+      {
+        days.map((view) => {
+          const state = stateConfig[view.state];
+          const extra = extraName(view);
+          return (
+            <li
+              class:list={[
+                "flex flex-col gap-1 rounded-md border p-2 text-xs",
+                state.cell,
+              ]}
+              aria-current={view.state === "today" ? "step" : undefined}
+            >
+              <span
+                class:list={[
+                  "text-[10px] font-bold uppercase tracking-widest",
+                  view.reward.day === lastDay ? "text-magenta" : "text-ink-dim",
+                ]}
+              >
+                day {view.reward.day}
+              </span>
+              {view.reward.coins > 0 && (
+                <CoinAmount amount={view.reward.coins} class="text-amber" />
+              )}
+              {extra && (
+                <span class="break-words text-ink">
+                  <span class="text-cyan" aria-hidden="true">
+                    +{" "}
+                  </span>
+                  {extra}
+                </span>
+              )}
+              <span
+                class:list={[
+                  "mt-auto text-[10px] font-bold tracking-widest",
+                  state.badge,
+                ]}
+              >
+                {state.label}
+              </span>
+            </li>
+          );
+        })
+      }
+    </ol>
+
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+      {
+        claimed ? (
+          <p class="text-sm text-ink-dim">
+            <span class="text-acid" aria-hidden="true">
+              ${" "}
+            </span>
+            Today's bonus:{" "}
+            {claimed.coins > 0 && (
+              <CoinAmount amount={claimed.coins} signed class="text-amber" />
+            )}
+            {claimed.item && <span class="text-ink"> + {claimed.item.name}</span>}
+            {claimed.crate && (
+              <span class="text-ink"> + {claimed.crate.name}</span>
+            )}
+            . Come back tomorrow for day {(streak.day % lastDay) + 1}.
+          </p>
+        ) : blocked === "season-closed" ? (
+          <p class="text-sm text-ink-faint">
+            This season is closed, so there are no more bonuses to claim.
+          </p>
+        ) : (
+          <>
+            <p class="text-xs text-ink-faint">
+              Claim once a day. Miss a day and the streak starts again at day 1.
+              Items you already own are swapped for coins.
+            </p>
+            <form method="post" action={withBase("/account/daily-bonus")}>
+              <button type="submit" class={btnPrimary}>
+                claim day {streak.day}
+              </button>
+            </form>
+          </>
+        )
+      }
+    </div>
+  </TerminalWindow>
+</section>

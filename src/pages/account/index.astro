@@ -6,6 +6,7 @@ import Notice from "../../components/admin/Notice.astro";
 import PlayerAvatar from "../../components/PlayerAvatar.astro";
 import WalletSection from "../../components/WalletSection.astro";
 import MiniTaskList from "../../components/MiniTaskList.astro";
+import DailyBonusPanel from "../../components/DailyBonusPanel.astro";
 import CoinAmount from "../../components/CoinAmount.astro";
 import CrateReveal from "../../components/CrateReveal.astro";
 import { btnPrimary, btnGhost } from "../../components/admin/styles";
@@ -13,7 +14,12 @@ import { updateOwnProfile } from "../../data/accounts";
 import { runWalletAction } from "../../data/wallet-actions";
 import { parseProfileForm, parseWalletAction } from "../../lib/account-forms";
 import type { FieldErrors, FormValues } from "../../lib/admin-forms";
-import { COIN_OUTCOME_NOTICE, parseCoinOutcome } from "../../lib/coin-ui";
+import {
+  COIN_OUTCOME_NOTICE,
+  DAILY_BONUS_OUTCOME_NOTICE,
+  parseCoinOutcome,
+  parseDailyBonusOutcome,
+} from "../../lib/coin-ui";
 import {
   LIST_PAGE_SIZE,
   pageHref,
@@ -98,11 +104,20 @@ const pull =
 const miniTasks = seasonQueries.features.mini_tasks
   ? seasonQueries.getMiniTaskBoard(player.playerId)
   : undefined;
+const dailyBonus = season
+  ? seasonQueries.getDailyBonusPanel(player.playerId)
+  : undefined;
+const dailyOutcome = parseDailyBonusOutcome(
+  Astro.url.searchParams.get("daily"),
+);
+const dailyNotice = dailyOutcome
+  ? DAILY_BONUS_OUTCOME_NOTICE[dailyOutcome]
+  : undefined;
 const achievementsOn = seasonQueries.features.achievements;
 const ledgerHref = (page: number) =>
   pageHref(Astro.url, "history", page, {
     hash: "history",
-    drop: ["coins", "done", "pull"],
+    drop: ["coins", "done", "pull", "daily"],
   });
 const coinNotice =
   coinOutcome && !pull ? COIN_OUTCOME_NOTICE[coinOutcome] : undefined;
@@ -187,6 +202,12 @@ const avatarPreview = {
         <button type="submit" class={btnPrimary}>save profile</button>
       </form>
     </TerminalWindow>
+
+    {
+      dailyBonus && (
+        <DailyBonusPanel panel={dailyBonus} notice={dailyNotice} class="mt-12" />
+      )
+    }
 
     {
       miniTasks && (

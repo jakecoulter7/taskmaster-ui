@@ -53,6 +53,7 @@ import { createBountyQueries } from "./bounty-queries";
 import { createEconomyQueries } from "./economy-queries";
 import { createSkillQueries } from "./skill-queries";
 import { createMiniTaskQueries } from "./mini-task-queries";
+import { createDailyBonusQueries } from "./daily-bonus-queries";
 import { createAchievementQueries } from "./achievement-queries";
 import { createActivityQueries } from "./activity-queries";
 import { isWrappedLive } from "./seasons";
@@ -1784,6 +1785,7 @@ export function createQueries(data: CompetitionData) {
       getSkillPerks: coinQueries.getSkillPerks,
     }),
     ...miniTaskQueries,
+    ...createDailyBonusQueries(data),
     ...createActivityQueries(data),
     ...createAchievementQueries(data, {
       getLeaderboardWithMovement,

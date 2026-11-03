@@ -42,6 +42,7 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     match: [
       "/admin/polls",
       "/admin/mini-tasks",
+      "/admin/daily-bonus",
       "/admin/changelog",
       "/admin/shop",
       "/admin/market",

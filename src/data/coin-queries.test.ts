@@ -92,6 +92,7 @@ function setup({
         shop_bundles: false,
         shop_raffle: false,
         shop_gift_wrap: false,
+        daily_bonus: false,
       },
       players: [player("ann", "Ann"), player("bob", "Bob"), player("cat")],
       tasks: [done, live],
@@ -458,6 +459,7 @@ describe("crates", () => {
           shop_bundles: false,
           shop_raffle: false,
           shop_gift_wrap: false,
+          daily_bonus: false,
         },
         players: [player("ann", "Ann"), player("bob")],
         coins: coinData({
@@ -601,6 +603,7 @@ describe("limited-time stock", () => {
         shop_bundles: false,
         shop_raffle: false,
         shop_gift_wrap: false,
+        daily_bonus: false,
       },
       players: [player("ann")],
       coins: coinData({
@@ -917,6 +920,7 @@ describe("gifted eggs", () => {
     shop_bundles: false,
     shop_raffle: false,
     shop_gift_wrap: false,
+    daily_bonus: false,
   });
   const gift = (id: number, crateId: string, crateOpenId?: number) => ({
     id,

@@ -1,9 +1,14 @@
 import { z } from "astro/zod";
 import type { PollRecord } from "../data/admin";
 import { toWallClock } from "./time";
-import type { FeatureFlagKey, SubmissionOutcome } from "../types";
+import type {
+  DailyBonusReward,
+  FeatureFlagKey,
+  SubmissionOutcome,
+} from "../types";
 import { FEATURE_FLAG_KEYS } from "../data/feature-flags";
 import { MINI_TASK_MAX_REWARD } from "../data/mini-tasks";
+import { DAILY_BONUS_DAYS, DAILY_BONUS_MAX_COINS } from "../data/daily-bonus";
 import {
   AVATAR_FRAMES,
   COSMETIC_KINDS,
@@ -1387,6 +1392,63 @@ export function parseMiniTaskCompletionsForm(form: FormData): string[] {
         .filter((v) => v !== ""),
     ),
   ];
+}
+
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+const dailyBonusCoins = z
+  .string()
+  .trim()
+  .min(1, "Required.")
+  .transform(Number)
+  .pipe(
+    z
+      .number({ error: "Enter a whole number." })
+      .int("Enter a whole number.")
+      .min(0, "Must be 0 or more.")
+      .max(
+        DAILY_BONUS_MAX_COINS,
+        `A day pays at most ${DAILY_BONUS_MAX_COINS} Clim Coin.`,
+      ),
+  );
+
+/** A day's extra: blank, `item:<shop item id>` or `egg:<crate id>`. */
+function parseDailyBonusExtra(
+  value: string,
+): Pick<DailyBonusReward, "itemId" | "crateId"> | undefined {
+  const v = value.trim();
+  if (v === "") return {};
+  if (v.startsWith("item:") && v.length > 5) return { itemId: v.slice(5) };
+  const crateId = v.startsWith("egg:") ? v.slice(4) : "";
+  return CRATES.some((crate) => crate.id === crateId) ? { crateId } : undefined;
+}
+
+/**
+ * The daily bonus schedule: `coins<day>` and `extra<day>` for each day of
+ * the cycle. Every day has to give something.
+ */
+export function parseDailyBonusForm(
+  form: FormData,
+): ParseResult<DailyBonusReward[]> {
+  const values = formValues(form);
+  const errors: FieldErrors = {};
+  const rewards: DailyBonusReward[] = [];
+  for (let day = 1; day <= DAILY_BONUS_DAYS; day++) {
+    const coins = dailyBonusCoins.safeParse(values[`coins${day}`] ?? "");
+    const extra = parseDailyBonusExtra(values[`extra${day}`] ?? "");
+    if (!coins.success) {
+      errors[`coins${day}`] = coins.error.issues[0]?.message ?? "Invalid.";
+    } else if (!extra) {
+      errors[`extra${day}`] = "Pick an item or an egg from the list.";
+    } else if (coins.data === 0 && !extra.itemId && !extra.crateId) {
+      errors[`coins${day}`] = "Give coins, an item or an egg.";
+    } else {
+      rewards.push({ day, coins: coins.data, ...extra });
+    }
+  }
+  return Object.keys(errors).length > 0
+    ? { ok: false, errors, values }
+    : { ok: true, data: rewards, values };
 }
 
 const itemGiftSchema = z.object({
