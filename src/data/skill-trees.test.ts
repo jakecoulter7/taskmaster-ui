@@ -604,6 +604,7 @@ describe("skill queries", () => {
           shop_raffle: false,
           shop_gift_wrap: false,
           daily_bonus: false,
+          pool_bracket: false,
         },
         coins: coinData({
           items: [

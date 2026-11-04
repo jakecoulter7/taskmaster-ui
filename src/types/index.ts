@@ -1618,7 +1618,8 @@ export type FeatureFlagKey =
   | "shop_bundles"
   | "shop_raffle"
   | "shop_gift_wrap"
-  | "daily_bonus";
+  | "daily_bonus"
+  | "pool_bracket";
 
 /** Whether each feature is on. */
 export type FeatureFlags = Record<FeatureFlagKey, boolean>;

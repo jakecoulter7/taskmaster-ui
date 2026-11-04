@@ -7,6 +7,7 @@ export const ADMIN_ROSTER = "/admin/roster";
 export const ADMIN_SITE = "/admin/site";
 export const ADMIN_ACTIVITY = "/admin/activity";
 export const ADMIN_ECONOMY = "/admin/economy";
+export const ADMIN_POOL = "/admin/pool";
 export const ADMIN_GUIDE = "/admin/guide";
 
 /**
@@ -56,6 +57,13 @@ export const ADMIN_SECTIONS: AdminSection[] = [
     keywords:
       "activity log audit history timeline disputes who changed what score changes coin adjustments grants deductions gifts purchases crates power-ups sabotage skills wishes mini-tasks bounties economy circulation supply inflation balance prices top holders richest shop sales stock revenue",
     match: [ADMIN_ECONOMY],
+  },
+  {
+    href: ADMIN_POOL,
+    label: "pool",
+    title: "Run the pool bracket",
+    hint: "pool pairs, weekly draws and match results",
+    keywords: "pool bracket pairs draw matches knockout tournament winner",
   },
   {
     href: ADMIN_GUIDE,

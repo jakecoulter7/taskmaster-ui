@@ -73,6 +73,11 @@ export const FEATURE_FLAGS: Record<
     description:
       "Adds a daily bonus to players' accounts: claim once a day (UK time) on a 7-day streak for the coins, items and eggs set in /admin/site#daily-bonus. Missing a day starts the streak again at day 1. Off: the panel is hidden and nobody can claim; rewards already claimed stay put.",
   },
+  pool_bracket: {
+    label: "Pool bracket",
+    description:
+      "Opens /pool: the weekly pool bracket and season table, linked from the nav's play menu and the ⌘K palette. Off: the page and its links are hidden (it 404s); admins can still set up teams and draws.",
+  },
 };
 
 export const FEATURE_FLAG_KEYS = Object.keys(FEATURE_FLAGS) as FeatureFlagKey[];

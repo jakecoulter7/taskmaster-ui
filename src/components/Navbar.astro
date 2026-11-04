@@ -22,6 +22,8 @@ interface Props {
   market?: boolean;
   /** The bounties feature flag: links `/bounties` when on. */
   bounties?: boolean;
+  /** The pool bracket feature flag: links `/pool` when on. */
+  pool?: boolean;
 }
 
 const {
@@ -32,6 +34,7 @@ const {
   achievements = false,
   market = false,
   bounties = false,
+  pool = false,
 } = Astro.props;
 
 interface NavItem {
@@ -62,6 +65,7 @@ const moreGroups: NavGroup[] = [
     children: [
       { href: "/live", label: "live" },
       { href: "/recaps", label: "recaps" },
+      ...(pool ? [{ href: "/pool", label: "pool master" }] : []),
       { href: "/rules", label: "rules" },
     ],
   },

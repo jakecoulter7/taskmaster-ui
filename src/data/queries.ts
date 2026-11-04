@@ -1345,11 +1345,26 @@ export function createQueries(data: CompetitionData) {
         ]
       : [];
 
+    const poolItems: CommandPaletteItem[] = data.features.pool_bracket
+      ? [
+          {
+            id: "page-pool",
+            label: "Pool Master",
+            group: "page",
+            href: withBase("/pool"),
+            hint: "the weekly pool knockout bracket",
+            keywords:
+              "pool master bracket knockout tournament duos pairs draw match winner leaderboard",
+          },
+        ]
+      : [];
+
     return [
       ...PALETTE_PAGES,
       ...skillItems,
       ...marketItems,
       ...bountyItems,
+      ...poolItems,
       ...seasonItems,
       ...wrappedItems,
       ...taskItems,

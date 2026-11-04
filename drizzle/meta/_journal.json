@@ -260,6 +260,13 @@
       "when": 1793701201825,
       "tag": "0036_daily_bonus",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793800031317,
+      "tag": "0037_pool_bracket",
+      "breakpoints": true
     }
   ]
 }

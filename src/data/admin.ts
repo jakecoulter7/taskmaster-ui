@@ -38,6 +38,8 @@ import {
   shopItems,
   playerAccounts,
   players,
+  poolBrackets,
+  poolTeams,
   pollOptions,
   polls,
   pollVotes,
@@ -386,15 +388,22 @@ export async function setSeasonClosed(
 /** What still belongs to a season; only an empty season can be deleted. */
 export async function getSeasonContents(id: string): Promise<DeleteImpact[]> {
   const db = getDb();
-  const [[p], [t], [k]] = await db.batch([
+  const [[p], [t], [k], [pt], [pb]] = await db.batch([
     db.select({ n: count() }).from(players).where(eq(players.seasonId, id)),
     db.select({ n: count() }).from(teams).where(eq(teams.seasonId, id)),
     db.select({ n: count() }).from(tasks).where(eq(tasks.seasonId, id)),
+    db.select({ n: count() }).from(poolTeams).where(eq(poolTeams.seasonId, id)),
+    db
+      .select({ n: count() })
+      .from(poolBrackets)
+      .where(eq(poolBrackets.seasonId, id)),
   ]);
   return [
     { label: "player", count: p.n },
     { label: "squad", count: t.n },
     { label: "week", count: k.n },
+    { label: "pool team", count: pt.n },
+    { label: "pool bracket", count: pb.n },
   ];
 }
 
