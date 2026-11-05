@@ -14,9 +14,32 @@ import {
 import { getDb } from "../db";
 import {
   bonusPoints,
+  bundlePurchases,
   changelogEntries,
+  coinAdjustments,
+  coinPurchases,
+  crateOpens,
+  dailyBonusClaims,
+  dailyBonusRewards,
+  eggGifts,
+  equippedItems,
+  featureFlags,
+  itemGifts,
+  marketListings,
+  bounties,
+  marketOffers,
+  marketSales,
+  miniTaskCompletions,
+  miniTasks,
+  powerUpUses,
+  shopBundleItems,
+  shopBundles,
+  shopDeals,
+  shopItems,
   playerAccounts,
   players,
+  poolBrackets,
+  poolTeams,
   pollOptions,
   polls,
   pollVotes,
@@ -32,26 +55,46 @@ import {
   teamMembers,
   teamScores,
   teams,
+  skillUnlocks,
+  wishes,
 } from "../db/schema";
 import type { BatchItem } from "drizzle-orm/batch";
 import type {
   AdminUser,
+  AdminWish,
+  DailyBonusReward,
+  FeatureFlagKey,
+  FeatureFlagView,
+  Page,
   ScoreAuditEntry,
   SubmissionOwnerRef,
+  WeekScoreAuditEntry,
   WeekCounts,
 } from "../types";
 import { EMPTY_WEEK_COUNTS } from "./week-progress";
+import { featureFlagViews } from "./feature-flags";
+import { mapDailyBonusRewards } from "./daily-bonus";
+import { lockWallet } from "./shop";
 import { timestamptzToIso } from "../lib/time";
+import { LIST_PAGE_SIZE, pageInfo } from "../lib/pagination";
 import { deleteObjects, putObject } from "../lib/storage";
 import { submissionObjectKey } from "../lib/submission-forms";
 import type {
   AddEntryInput,
   BonusInput,
+  BundleInput,
+  DealInput,
   ChangelogInput,
+  CoinAdjustmentInput,
+  EggGiftInput,
+  ItemGiftInput,
+  MiniTaskInput,
+  WishDecisionInput,
   PlayerInput,
   PollInput,
   RecapInput,
   SeasonInput,
+  ShopItemInput,
   TaskInput,
   TaskScoreInput,
   TeamInput,
@@ -68,6 +111,7 @@ export type TaskRecord = typeof tasks.$inferSelect;
 export type BonusRecord = typeof bonusPoints.$inferSelect;
 export type RecapRecord = typeof recaps.$inferSelect;
 export type ChangelogRecord = typeof changelogEntries.$inferSelect;
+export type ShopItemRecord = typeof shopItems.$inferSelect;
 export type PollRecord = typeof polls.$inferSelect & {
   options: (typeof pollOptions.$inferSelect)[];
 };
@@ -192,39 +236,61 @@ export async function getPlayerDeleteImpact(
   id: string,
 ): Promise<DeleteImpact[]> {
   const db = getDb();
-  const [[s], [b], [m], [a], [e], [p], [v], [r]] = await db.batch([
-    db
-      .select({ n: count() })
-      .from(taskScores)
-      .where(eq(taskScores.playerId, id)),
-    db
-      .select({ n: count() })
-      .from(bonusPoints)
-      .where(eq(bonusPoints.playerId, id)),
-    db
-      .select({ n: count() })
-      .from(teamMembers)
-      .where(eq(teamMembers.playerId, id)),
-    db
-      .select({ n: count() })
-      .from(playerAccounts)
-      .where(eq(playerAccounts.playerId, id)),
-    countSubmissions(eq(taskSubmissions.playerId, id)),
-    db
-      .select({ n: count() })
-      .from(predictions)
-      .where(
-        or(eq(predictions.playerId, id), eq(predictions.pickedPlayerId, id)),
-      ),
-    db
-      .select({ n: count() })
-      .from(peoplesChoiceVotes)
-      .where(eq(peoplesChoiceVotes.playerId, id)),
-    db
-      .select({ n: count() })
-      .from(submissionReactions)
-      .where(eq(submissionReactions.playerId, id)),
-  ]);
+  const [[s], [b], [m], [a], [e], [p], [v], [r], [c], [g], [o], [i], [x], [k]] =
+    await db.batch([
+      db
+        .select({ n: count() })
+        .from(taskScores)
+        .where(eq(taskScores.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(bonusPoints)
+        .where(eq(bonusPoints.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(teamMembers)
+        .where(eq(teamMembers.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(playerAccounts)
+        .where(eq(playerAccounts.playerId, id)),
+      countSubmissions(eq(taskSubmissions.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(predictions)
+        .where(
+          or(eq(predictions.playerId, id), eq(predictions.pickedPlayerId, id)),
+        ),
+      db
+        .select({ n: count() })
+        .from(peoplesChoiceVotes)
+        .where(eq(peoplesChoiceVotes.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(submissionReactions)
+        .where(eq(submissionReactions.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(coinPurchases)
+        .where(eq(coinPurchases.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(coinAdjustments)
+        .where(eq(coinAdjustments.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(crateOpens)
+        .where(eq(crateOpens.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(itemGifts)
+        .where(eq(itemGifts.playerId, id)),
+      db.select({ n: count() }).from(eggGifts).where(eq(eggGifts.playerId, id)),
+      db
+        .select({ n: count() })
+        .from(skillUnlocks)
+        .where(eq(skillUnlocks.playerId, id)),
+    ]);
   return [
     { label: "individual score", count: s.n },
     { label: "bonus / deduction", count: b.n },
@@ -234,6 +300,12 @@ export async function getPlayerDeleteImpact(
     { label: "winner prediction", count: p.n },
     { label: "People's Choice vote", count: v.n },
     { label: "reaction", count: r.n },
+    { label: "Clim Coin purchase", count: c.n },
+    { label: "Clim Coin grant / deduction", count: g.n },
+    { label: "mystery egg cracked", count: o.n },
+    { label: "gifted item", count: i.n },
+    { label: "gifted egg", count: x.n },
+    { label: "skill tree unlock", count: k.n },
   ];
 }
 
@@ -274,30 +346,64 @@ export async function setCurrentSeason(id: string): Promise<void> {
 
 /**
  * Closes a season, crowning its champion, or reopens it. A closed season's
- * weeks, roster and scores are read-only (see the middleware).
+ * weeks, roster and scores are read-only (see the middleware). Closing also
+ * takes its open marketplace listings down and declines their pending
+ * offers, so items go back to their sellers and offered coins are freed,
+ * and cancels its open bounties, freeing their rewards.
  */
 export async function setSeasonClosed(
   id: string,
   closed: boolean,
 ): Promise<void> {
-  await getDb()
+  const db = getDb();
+  const close = db
     .update(seasons)
     .set({ closedAt: closed ? sql`now()` : null })
     .where(eq(seasons.id, id));
+  if (!closed) {
+    await close;
+    return;
+  }
+  await db.batch([
+    close,
+    db.execute(sql`
+      update ${marketOffers} o
+      set status = 'declined', decided_at = now()
+      from ${marketListings} l
+      where l.id = o.listing_id
+        and l.season_id = ${id}
+        and l.status = 'open'
+        and o.status = 'pending'`),
+    db.execute(sql`
+      update ${marketListings}
+      set status = 'cancelled', closed_at = now()
+      where season_id = ${id} and status = 'open'`),
+    db.execute(sql`
+      update ${bounties}
+      set status = 'cancelled', closed_at = now()
+      where season_id = ${id} and status = 'open'`),
+  ]);
 }
 
 /** What still belongs to a season; only an empty season can be deleted. */
 export async function getSeasonContents(id: string): Promise<DeleteImpact[]> {
   const db = getDb();
-  const [[p], [t], [k]] = await db.batch([
+  const [[p], [t], [k], [pt], [pb]] = await db.batch([
     db.select({ n: count() }).from(players).where(eq(players.seasonId, id)),
     db.select({ n: count() }).from(teams).where(eq(teams.seasonId, id)),
     db.select({ n: count() }).from(tasks).where(eq(tasks.seasonId, id)),
+    db.select({ n: count() }).from(poolTeams).where(eq(poolTeams.seasonId, id)),
+    db
+      .select({ n: count() })
+      .from(poolBrackets)
+      .where(eq(poolBrackets.seasonId, id)),
   ]);
   return [
     { label: "player", count: p.n },
     { label: "squad", count: t.n },
     { label: "week", count: k.n },
+    { label: "pool team", count: pt.n },
+    { label: "pool bracket", count: pb.n },
   ];
 }
 
@@ -448,6 +554,7 @@ const taskValues = (input: TaskInput) => ({
   deadline: input.deadline,
   format: input.format,
   revealPassword: input.revealPassword,
+  hint: input.hint,
   maxSubmissions: input.maxSubmissions,
   submissionKinds: input.submissionKinds,
 });
@@ -713,29 +820,35 @@ function scoreAuditRows(
 ): AuditRow[] {
   const base = { ...actorFields(actor), taskId, entity };
   return [
-    ...diff.created.map((row): AuditRow => ({
-      ...base,
-      action: "created",
-      subjectId: row.id,
-      pointsAfter: row.points,
-      noteAfter: row.comment,
-    })),
-    ...diff.updated.map(({ before, after }): AuditRow => ({
-      ...base,
-      action: "updated",
-      subjectId: after.id,
-      pointsBefore: before.points,
-      pointsAfter: after.points,
-      noteBefore: before.comment,
-      noteAfter: after.comment,
-    })),
-    ...diff.deleted.map((row): AuditRow => ({
-      ...base,
-      action: "deleted",
-      subjectId: row.id,
-      pointsBefore: row.points,
-      noteBefore: row.comment,
-    })),
+    ...diff.created.map(
+      (row): AuditRow => ({
+        ...base,
+        action: "created",
+        subjectId: row.id,
+        pointsAfter: row.points,
+        noteAfter: row.comment,
+      }),
+    ),
+    ...diff.updated.map(
+      ({ before, after }): AuditRow => ({
+        ...base,
+        action: "updated",
+        subjectId: after.id,
+        pointsBefore: before.points,
+        pointsAfter: after.points,
+        noteBefore: before.comment,
+        noteAfter: after.comment,
+      }),
+    ),
+    ...diff.deleted.map(
+      (row): AuditRow => ({
+        ...base,
+        action: "deleted",
+        subjectId: row.id,
+        pointsBefore: row.points,
+        noteBefore: row.comment,
+      }),
+    ),
   ];
 }
 
@@ -983,18 +1096,37 @@ export async function deleteBonus(
   ]);
 }
 
-/** A week's score and bonus history, newest change first. */
+/** One page of a week's score and bonus history, newest change first. */
 export async function getScoreAuditLog(
   taskId: string,
-  limit = 100,
-): Promise<ScoreAuditEntry[]> {
-  const rows = await getDb()
-    .select()
-    .from(scoreAuditLog)
-    .where(eq(scoreAuditLog.taskId, taskId))
-    .orderBy(desc(scoreAuditLog.at), desc(scoreAuditLog.id))
-    .limit(limit);
-  return rows.map((row) => ({
+  page = 1,
+  pageSize = LIST_PAGE_SIZE,
+): Promise<Page<ScoreAuditEntry>> {
+  const db = getDb();
+  const ofTask = eq(scoreAuditLog.taskId, taskId);
+  const selectPage = (n: number) =>
+    db
+      .select()
+      .from(scoreAuditLog)
+      .where(ofTask)
+      .orderBy(desc(scoreAuditLog.at), desc(scoreAuditLog.id))
+      .limit(pageSize)
+      .offset((n - 1) * pageSize);
+  const [[counted], requested] = await db.batch([
+    db.select({ n: count() }).from(scoreAuditLog).where(ofTask),
+    selectPage(Math.max(1, page)),
+  ]);
+  const info = pageInfo(counted?.n ?? 0, page, pageSize);
+  // Past the last page: show the last page instead.
+  const rows =
+    info.page === page || info.total === 0
+      ? requested
+      : await selectPage(info.page);
+  return { ...info, items: rows.map(mapAuditRow) };
+}
+
+function mapAuditRow(row: typeof scoreAuditLog.$inferSelect): ScoreAuditEntry {
+  return {
     id: row.id,
     at: timestamptzToIso(row.at),
     actorName: row.actorName,
@@ -1005,7 +1137,23 @@ export async function getScoreAuditLog(
     ...(row.pointsAfter !== null && { pointsAfter: row.pointsAfter }),
     ...(row.noteBefore !== null && { noteBefore: row.noteBefore }),
     ...(row.noteAfter !== null && { noteAfter: row.noteAfter }),
-  }));
+  };
+}
+
+/**
+ * Every score and bonus change on `taskIds` (a season's weeks), newest
+ * first, for the activity log.
+ */
+export async function listScoreAuditForWeeks(
+  taskIds: readonly string[],
+): Promise<WeekScoreAuditEntry[]> {
+  if (taskIds.length === 0) return [];
+  const rows = await getDb()
+    .select()
+    .from(scoreAuditLog)
+    .where(inArray(scoreAuditLog.taskId, [...taskIds]))
+    .orderBy(desc(scoreAuditLog.at), desc(scoreAuditLog.id));
+  return rows.map((row) => ({ ...mapAuditRow(row), taskId: row.taskId }));
 }
 
 // ── Polls ─────────────────────────────────────────────────────────────
@@ -1291,9 +1439,490 @@ export async function deleteChangelogEntry(id: string): Promise<void> {
   await getDb().delete(changelogEntries).where(eq(changelogEntries.id, id));
 }
 
+// ── Feature flags ─────────────────────────────────────────────────────
+
+/** Every feature flag with its state and who last changed it. */
+export async function listFeatureFlags(): Promise<FeatureFlagView[]> {
+  return featureFlagViews(await getDb().select().from(featureFlags));
+}
+
+/** Turns a feature on or off, recording who did. */
+export async function setFeatureFlag(
+  key: FeatureFlagKey,
+  enabled: boolean,
+  actor: AdminUser,
+): Promise<void> {
+  const fields = { enabled, ...actorFields(actor) };
+  await getDb()
+    .insert(featureFlags)
+    .values({ key, ...fields })
+    .onConflictDoUpdate({
+      target: featureFlags.key,
+      set: { ...fields, updatedAt: sql`now()` },
+    });
+}
+
+// ── Clim Coin ─────────────────────────────────────────────────────────
+
+/** The catalogue in display order, with how many times each was bought. */
+export async function listShopItems(): Promise<
+  (ShopItemRecord & { purchases: number })[]
+> {
+  const db = getDb();
+  const [items, counts] = await db.batch([
+    db
+      .select()
+      .from(shopItems)
+      .orderBy(
+        asc(shopItems.category),
+        asc(shopItems.sortOrder),
+        asc(shopItems.name),
+      ),
+    db
+      .select({ itemId: coinPurchases.itemId, n: count() })
+      .from(coinPurchases)
+      .groupBy(coinPurchases.itemId),
+  ]);
+  const bought = new Map(counts.map((c) => [c.itemId, c.n]));
+  return items.map((item) => ({
+    ...item,
+    purchases: bought.get(item.id) ?? 0,
+  }));
+}
+
+export async function getShopItem(
+  id: string,
+): Promise<ShopItemRecord | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(shopItems)
+    .where(eq(shopItems.id, id));
+  return row;
+}
+
+export async function createShopItem(input: ShopItemInput): Promise<void> {
+  await getDb()
+    .insert(shopItems)
+    .values({ ...input, sortOrder: input.sortOrder ?? 0 });
+}
+
+/**
+ * Saves an item's editable fields. Its id, category, cosmetic kind and
+ * power-up are fixed once created, so owned items keep their slot and effect.
+ */
+export async function updateShopItem(
+  id: string,
+  input: ShopItemInput,
+): Promise<void> {
+  await getDb()
+    .update(shopItems)
+    .set({
+      name: input.name,
+      description: input.description,
+      price: input.price,
+      imageUrl: input.imageUrl,
+      cosmeticValue: input.cosmeticValue,
+      available: input.available,
+      crateOnly: input.crateOnly,
+      crateId: input.crateId,
+      availableFrom: input.availableFrom,
+      availableUntil: input.availableUntil,
+      stock: input.stock,
+      ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
+    })
+    .where(eq(shopItems.id, id));
+}
+
+export async function getShopItemPurchaseCount(id: string): Promise<number> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(coinPurchases)
+    .where(eq(coinPurchases.itemId, id));
+  return row?.n ?? 0;
+}
+
+/** Deletes an item nobody bought (owned items can only be retired). */
+export async function deleteShopItem(id: string): Promise<void> {
+  await getDb().delete(shopItems).where(eq(shopItems.id, id));
+}
+
+// ── Shop bundles and the deal of the week ────────────────────────────
+
+export type BundleRecord = typeof shopBundles.$inferSelect & {
+  itemIds: string[];
+  purchases: number;
+};
+
+/** Every bundle in display order, with its items and how often it sold. */
+export async function listBundles(): Promise<BundleRecord[]> {
+  const db = getDb();
+  const [bundles, items, sold] = await db.batch([
+    db
+      .select()
+      .from(shopBundles)
+      .orderBy(asc(shopBundles.sortOrder), asc(shopBundles.name)),
+    db.select().from(shopBundleItems),
+    db
+      .select({ bundleId: bundlePurchases.bundleId, n: count() })
+      .from(bundlePurchases)
+      .groupBy(bundlePurchases.bundleId),
+  ]);
+  const counts = new Map(sold.map((row) => [row.bundleId, row.n]));
+  return bundles.map((bundle) => ({
+    ...bundle,
+    itemIds: items
+      .filter((item) => item.bundleId === bundle.id)
+      .map((item) => item.itemId)
+      .sort(),
+    purchases: counts.get(bundle.id) ?? 0,
+  }));
+}
+
+export async function getBundle(id: string): Promise<BundleRecord | undefined> {
+  return (await listBundles()).find((bundle) => bundle.id === id);
+}
+
+const bundleItemRows = (bundleId: string, itemIds: readonly string[]) =>
+  itemIds.map((itemId) => ({ bundleId, itemId }));
+
+export async function createBundle(input: BundleInput): Promise<void> {
+  const db = getDb();
+  const { itemIds, ...bundle } = input;
+  await db.batch([
+    db
+      .insert(shopBundles)
+      .values({ ...bundle, sortOrder: bundle.sortOrder ?? 0 }),
+    db.insert(shopBundleItems).values(bundleItemRows(bundle.id, itemIds)),
+  ]);
+}
+
+/**
+ * Saves a bundle and replaces its items. Copies already sold stay with
+ * their buyers; only future sales get the new line-up.
+ */
+export async function updateBundle(
+  id: string,
+  input: BundleInput,
+): Promise<void> {
+  const db = getDb();
+  await db.batch([
+    db
+      .update(shopBundles)
+      .set({
+        name: input.name,
+        description: input.description,
+        price: input.price,
+        available: input.available,
+        ...(input.sortOrder !== undefined && { sortOrder: input.sortOrder }),
+      })
+      .where(eq(shopBundles.id, id)),
+    db.delete(shopBundleItems).where(eq(shopBundleItems.bundleId, id)),
+    db.insert(shopBundleItems).values(bundleItemRows(id, input.itemIds)),
+  ]);
+}
+
+/** Deletes a bundle nobody bought (sold ones can only be retired). */
+export async function deleteBundle(id: string): Promise<void> {
+  await getDb().delete(shopBundles).where(eq(shopBundles.id, id));
+}
+
+/** Admin picks for the deal of the week, latest week first. */
+export async function listDealOverrides() {
+  return getDb().select().from(shopDeals).orderBy(desc(shopDeals.weekStart));
+}
+
+/** Sets (or replaces) the deal for the week starting `weekStart`. */
+export async function setDealOverride(
+  input: DealInput,
+  actor: AdminUser,
+): Promise<void> {
+  const fields = {
+    itemId: input.itemId,
+    discountPercent: input.discountPercent,
+    ...actorFields(actor),
+  };
+  await getDb()
+    .insert(shopDeals)
+    .values({ weekStart: input.weekStart, ...fields })
+    .onConflictDoUpdate({
+      target: shopDeals.weekStart,
+      set: { ...fields, updatedAt: sql`now()` },
+    });
+}
+
+/** Hands a week's deal back to the automatic rotation. */
+export async function clearDealOverride(weekStart: string): Promise<void> {
+  await getDb().delete(shopDeals).where(eq(shopDeals.weekStart, weekStart));
+}
+
+/** A player's Clim Coin grants and deductions, newest first. */
+export async function listCoinAdjustments(playerId: string) {
+  return getDb()
+    .select()
+    .from(coinAdjustments)
+    .where(eq(coinAdjustments.playerId, playerId))
+    .orderBy(desc(coinAdjustments.id));
+}
+
+export async function addCoinAdjustment(
+  playerId: string,
+  input: CoinAdjustmentInput,
+  actor: AdminUser,
+): Promise<void> {
+  await getDb()
+    .insert(coinAdjustments)
+    .values({ playerId, ...input, ...actorFields(actor) });
+}
+
+export async function deleteCoinAdjustment(
+  playerId: string,
+  id: number,
+): Promise<void> {
+  await getDb()
+    .delete(coinAdjustments)
+    .where(
+      and(eq(coinAdjustments.id, id), eq(coinAdjustments.playerId, playerId)),
+    );
+}
+
+/**
+ * Gifts a player a shop item: owned through a zero-price purchase, written
+ * with its `item_gifts` row in one statement under the player's wallet lock.
+ * Any catalogue item can be gifted (retired, egg-exclusive or out of its
+ * sale window too), but not one they already own, nor a power-up whose
+ * effect they've had this season (each effect is used once a season, so a
+ * second charge would be dead). Returns whether it was gifted.
+ */
+export async function giftItem(
+  playerId: string,
+  input: ItemGiftInput,
+  actor: AdminUser,
+): Promise<boolean> {
+  const { actorId, actorName } = actorFields(actor);
+  const db = getDb();
+  const [, gifted] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    db.execute(sql`
+      with given as (
+        insert into ${coinPurchases} (player_id, item_id, price)
+        select player.id, item.id, 0
+        from ${players} player
+        cross join ${shopItems} item
+        where player.id = ${playerId}
+          and item.id = ${input.itemId}
+          and not exists (
+            select 1 from ${coinPurchases} owned
+            join ${shopItems} owned_item on owned_item.id = owned.item_id
+            where owned.player_id = player.id
+              and (
+                owned.item_id = item.id
+                or owned_item.power_up = item.power_up
+              )
+          )
+        returning id, item_id
+      )
+      insert into ${itemGifts}
+        (player_id, item_id, purchase_id, reason, actor_id, actor_name)
+      select ${playerId}, given.item_id, given.id, ${input.reason},
+        ${actorId}, ${actorName}
+      from given
+      returning id`),
+  ]);
+  return gifted.rows.length > 0;
+}
+
+/**
+ * Takes back an item an admin gifted: its free purchase goes (and the gift
+ * row with it), and the player stops wearing it. A power-up charge already
+ * used on a week is kept (revoke the use in the week's judge tab first).
+ * Returns whether it was taken back.
+ */
+export async function revokeItemGift(
+  playerId: string,
+  giftId: number,
+): Promise<boolean> {
+  const db = getDb();
+  const [revoked] = await db.batch([
+    db.execute(sql`
+      delete from ${coinPurchases}
+      where id = (
+          select purchase_id from ${itemGifts}
+          where id = ${giftId} and player_id = ${playerId}
+        )
+        and not exists (
+          select 1 from ${powerUpUses} used
+          where used.purchase_id = ${coinPurchases.id}
+        )
+        and not exists (
+          select 1 from ${wishes} made
+          where made.purchase_id = ${coinPurchases.id}
+        )
+        and not exists (
+          select 1 from ${marketSales} sold
+          where sold.source_purchase_id = ${coinPurchases.id}
+        )
+      returning id`),
+    db.delete(equippedItems).where(
+      and(
+        eq(equippedItems.playerId, playerId),
+        sql`not exists (
+            select 1 from ${coinPurchases} owned
+            where owned.player_id = ${equippedItems.playerId}
+              and owned.item_id = ${equippedItems.itemId}
+          )`,
+      ),
+    ),
+  ]);
+  return revoked.rows.length > 0;
+}
+
+/**
+ * Gifts a player a mystery egg (`crateId`, any egg, on sale or not) to
+ * crack from their inventory, free. Returns whether it was gifted (the
+ * player still exists).
+ */
+export async function giftEgg(
+  playerId: string,
+  input: EggGiftInput,
+  actor: AdminUser,
+): Promise<boolean> {
+  const { actorId, actorName } = actorFields(actor);
+  const result = await getDb().execute(sql`
+    insert into ${eggGifts}
+      (player_id, crate_id, reason, actor_id, actor_name)
+    select player.id, ${input.crateId}, ${input.reason}, ${actorId},
+      ${actorName}
+    from ${players} player
+    where player.id = ${playerId}
+    returning id`);
+  return result.rows.length > 0;
+}
+
+/**
+ * Takes back a gifted egg the player hasn't cracked yet. Returns whether it
+ * was taken back (a cracked one stays: what it hatched is theirs).
+ */
+export async function revokeEggGift(
+  playerId: string,
+  giftId: number,
+): Promise<boolean> {
+  const db = getDb();
+  const [, revoked] = await db.batch([
+    db.execute(lockWallet(playerId)),
+    db.execute(sql`
+      delete from ${eggGifts}
+      where id = ${giftId}
+        and player_id = ${playerId}
+        and crate_open_id is null
+      returning id`),
+  ]);
+  return revoked.rows.length > 0;
+}
+
+// ── Wishes ────────────────────────────────────────────────────────────
+
+/** How many decided wishes the dashboard shows under the pending ones. */
+const RECENT_WISHES = 5;
+
+/**
+ * Wishes for the admin dashboard, from every season: all pending ones
+ * (oldest first, so they're answered in order) and the newest few decided.
+ */
+export async function listWishes(): Promise<{
+  pending: AdminWish[];
+  recent: AdminWish[];
+}> {
+  const db = getDb();
+  const columns = {
+    id: wishes.id,
+    playerId: wishes.playerId,
+    playerName: players.name,
+    wish: wishes.wish,
+    status: wishes.status,
+    response: wishes.response,
+    deciderName: wishes.deciderName,
+    decidedAt: wishes.decidedAt,
+    createdAt: wishes.createdAt,
+  };
+  const [pending, recent] = await db.batch([
+    db
+      .select(columns)
+      .from(wishes)
+      .innerJoin(players, eq(players.id, wishes.playerId))
+      .where(eq(wishes.status, "pending"))
+      .orderBy(asc(wishes.id)),
+    db
+      .select(columns)
+      .from(wishes)
+      .innerJoin(players, eq(players.id, wishes.playerId))
+      .where(notInArray(wishes.status, ["pending"]))
+      .orderBy(desc(wishes.decidedAt), desc(wishes.id))
+      .limit(RECENT_WISHES),
+  ]);
+  const toWish = (row: (typeof pending)[number]): AdminWish => ({
+    id: row.id,
+    playerId: row.playerId,
+    playerName: row.playerName,
+    wish: row.wish,
+    status: row.status,
+    ...(row.response !== null && { response: row.response }),
+    ...(row.deciderName !== null && { deciderName: row.deciderName }),
+    ...(row.decidedAt !== null && {
+      decidedAt: timestamptzToIso(row.decidedAt),
+    }),
+    at: timestamptzToIso(row.createdAt),
+  });
+  return { pending: pending.map(toWish), recent: recent.map(toWish) };
+}
+
+/**
+ * Grants or declines a pending wish, with an optional reply for the player.
+ * A decision is final; returns `false` if it was already decided (e.g. by
+ * another admin at the same time).
+ */
+export async function decideWish(
+  input: WishDecisionInput,
+  actor: AdminUser,
+): Promise<boolean> {
+  const { actorId, actorName } = actorFields(actor);
+  const decided = await getDb()
+    .update(wishes)
+    .set({
+      status: input.decision,
+      response: input.response,
+      deciderId: actorId,
+      deciderName: actorName,
+      decidedAt: sql`now()`,
+    })
+    .where(and(eq(wishes.id, input.rowId), eq(wishes.status, "pending")))
+    .returning({ id: wishes.id });
+  return decided.length > 0;
+}
+
+/**
+ * Cancels a power-up used on a week: its effect goes and the charge returns
+ * to the player's wallet, unused.
+ */
+export async function revokePowerUpUse(
+  taskId: string,
+  id: number,
+): Promise<void> {
+  await getDb()
+    .delete(powerUpUses)
+    .where(and(eq(powerUpUses.id, id), eq(powerUpUses.taskId, taskId)));
+}
+
 // ── Errors ────────────────────────────────────────────────────────────
 
 const CONSTRAINT_MESSAGES: Record<string, string> = {
+  shop_bundles_pkey: "A bundle with that id already exists.",
+  shop_bundle_items_item_id_shop_items_id_fk:
+    "That item is in a bundle. Take it out of the bundle (or retire it) first.",
+  bundle_purchases_bundle_id_shop_bundles_id_fk:
+    "Players bought this bundle, so it can't be deleted. Retire it instead.",
+  shop_deals_item_id_shop_items_id_fk: "That item no longer exists.",
+  mini_tasks_reward_range: "A mini-task pays between 1 and 5 Clim Coin.",
+  mini_tasks_ends_after_start: "The last day can't be before the first.",
   players_pkey: "A player with that id already exists.",
   teams_pkey: "A team with that id already exists.",
   tasks_pkey: "A task with that id already exists.",
@@ -1320,24 +1949,210 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   polls_bonus_task_id_tasks_id_fk: "That bonus week no longer exists.",
   changelog_entries_pkey: "A changelog entry with that id already exists.",
   recaps_moment_player_id_players_id_fk: "That player no longer exists.",
+  shop_items_pkey: "A shop item with that id already exists.",
+  shop_items_price_range: "Price must be between 0 and 10000.",
+  shop_items_image_when_visual: "Pets and avatars need an image.",
+  coin_purchases_item_id_shop_items_id_fk:
+    "Players own this item, so it can't be deleted. Retire it instead.",
+  coin_adjustments_amount_range: "Use a non-zero amount up to 10000.",
+  item_gifts_item_id_shop_items_id_fk:
+    "Players were gifted this item, so it can't be deleted. Retire it instead.",
+  shop_items_crate_only_droppable: "Power-ups can't be egg exclusives.",
+  shop_items_skill_only_not_crate_only:
+    "Skill tree rewards can't be egg exclusives.",
+  crate_opens_item_id_shop_items_id_fk:
+    "Players hatched this item from an egg, so it can't be deleted. Retire it instead.",
+  daily_bonus_rewards_item_id_shop_items_id_fk:
+    "That item is in a daily bonus schedule. Take it out of the schedule (or retire it) first.",
+  daily_bonus_rewards_season_id_seasons_id_fk:
+    "That season has a daily bonus schedule.",
+  daily_bonus_rewards_coins_range: "A day pays between 0 and 100 Clim Coin.",
+  daily_bonus_rewards_not_empty: "Every day needs coins, an item or an egg.",
 };
 
-/** The name of the Postgres constraint a write violated, if any. */
-export function violatedConstraint(error: unknown): string | undefined {
-  for (let e: unknown = error; e && typeof e === "object";) {
-    const { constraint } = e as { constraint?: string };
-    if (constraint) return constraint;
-    e = (e as { cause?: unknown }).cause;
-  }
-  return undefined;
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+/**
+ * A season's daily bonus schedule (defaults for unset days), whether it's
+ * been customised, and how many bonuses have been claimed.
+ */
+export async function getDailyBonusSchedule(seasonId: string): Promise<{
+  rewards: DailyBonusReward[];
+  customised: boolean;
+  claims: number;
+}> {
+  const db = getDb();
+  const [rows, [claimed]] = await db.batch([
+    db
+      .select()
+      .from(dailyBonusRewards)
+      .where(eq(dailyBonusRewards.seasonId, seasonId)),
+    db
+      .select({ n: count() })
+      .from(dailyBonusClaims)
+      .where(eq(dailyBonusClaims.seasonId, seasonId)),
+  ]);
+  return {
+    rewards: mapDailyBonusRewards(rows),
+    customised: rows.length > 0,
+    claims: claimed?.n ?? 0,
+  };
 }
+
+/**
+ * Replaces a season's daily bonus schedule, one row per day, in one
+ * transaction. Claims already made keep what they paid.
+ */
+export async function setDailyBonusSchedule(
+  seasonId: string,
+  rewards: readonly DailyBonusReward[],
+): Promise<void> {
+  const db = getDb();
+  await db.batch([
+    db
+      .delete(dailyBonusRewards)
+      .where(eq(dailyBonusRewards.seasonId, seasonId)),
+    db.insert(dailyBonusRewards).values(
+      rewards.map((r) => ({
+        seasonId,
+        day: r.day,
+        coins: r.coins,
+        itemId: r.itemId ?? null,
+        crateId: r.crateId ?? null,
+      })),
+    ),
+  ]);
+}
+
+/** Puts a season's daily bonus back on the default schedule. */
+export async function resetDailyBonusSchedule(seasonId: string): Promise<void> {
+  await getDb()
+    .delete(dailyBonusRewards)
+    .where(eq(dailyBonusRewards.seasonId, seasonId));
+}
+
+// ── Mini-tasks ────────────────────────────────────────────────────────
+
+export type MiniTaskRecord = typeof miniTasks.$inferSelect;
+
+/** A season's mini-tasks, newest start first, with how many completed each. */
+export async function listMiniTasks(
+  seasonId: string,
+): Promise<(MiniTaskRecord & { completions: number })[]> {
+  const db = getDb();
+  const [rows, counts] = await db.batch([
+    db
+      .select()
+      .from(miniTasks)
+      .where(eq(miniTasks.seasonId, seasonId))
+      .orderBy(desc(miniTasks.startsOn), desc(miniTasks.id)),
+    db
+      .select({ id: miniTaskCompletions.miniTaskId, n: count() })
+      .from(miniTaskCompletions)
+      .where(eq(miniTaskCompletions.seasonId, seasonId))
+      .groupBy(miniTaskCompletions.miniTaskId),
+  ]);
+  const done = new Map(counts.map((c) => [c.id, c.n]));
+  return rows.map((row) => ({ ...row, completions: done.get(row.id) ?? 0 }));
+}
+
+/** A mini-task with the ids of the players who completed it. */
+export async function getMiniTask(
+  id: number,
+): Promise<(MiniTaskRecord & { completedBy: string[] }) | undefined> {
+  const db = getDb();
+  const [[row], done] = await db.batch([
+    db.select().from(miniTasks).where(eq(miniTasks.id, id)),
+    db
+      .select({ playerId: miniTaskCompletions.playerId })
+      .from(miniTaskCompletions)
+      .where(eq(miniTaskCompletions.miniTaskId, id)),
+  ]);
+  return row && { ...row, completedBy: done.map((d) => d.playerId) };
+}
+
+/** Creates a mini-task in `seasonId`, returning its id. */
+export async function createMiniTask(
+  seasonId: string,
+  input: MiniTaskInput,
+): Promise<number> {
+  const [row] = await getDb()
+    .insert(miniTasks)
+    .values({ seasonId, ...input })
+    .returning({ id: miniTasks.id });
+  return row.id;
+}
+
+export async function updateMiniTask(
+  id: number,
+  input: MiniTaskInput,
+): Promise<void> {
+  await getDb().update(miniTasks).set(input).where(eq(miniTasks.id, id));
+}
+
+export async function getMiniTaskDeleteImpact(
+  id: number,
+): Promise<DeleteImpact[]> {
+  const [row] = await getDb()
+    .select({ n: count() })
+    .from(miniTaskCompletions)
+    .where(eq(miniTaskCompletions.miniTaskId, id));
+  return [{ label: "completion", count: row?.n ?? 0 }];
+}
+
+/** Deletes a mini-task; its completions (and their coin) go with it. */
+export async function deleteMiniTask(id: number): Promise<void> {
+  await getDb().delete(miniTasks).where(eq(miniTasks.id, id));
+}
+
+/**
+ * Sets exactly who has completed a mini-task. Players already ticked keep
+ * their original time and actor; newly ticked ones are recorded as `actor`,
+ * now. Players outside the mini-task's season are rejected by the foreign
+ * key. One transaction.
+ */
+export async function setMiniTaskCompletions(
+  task: Pick<MiniTaskRecord, "id" | "seasonId">,
+  playerIds: readonly string[],
+  actor: AdminUser,
+): Promise<void> {
+  const db = getDb();
+  const ofTask = eq(miniTaskCompletions.miniTaskId, task.id);
+  const remove = db
+    .delete(miniTaskCompletions)
+    .where(
+      playerIds.length === 0
+        ? ofTask
+        : and(ofTask, notInArray(miniTaskCompletions.playerId, [...playerIds])),
+    );
+  if (playerIds.length === 0) {
+    await remove;
+    return;
+  }
+  await db.batch([
+    remove,
+    db
+      .insert(miniTaskCompletions)
+      .values(
+        playerIds.map((playerId) => ({
+          miniTaskId: task.id,
+          playerId,
+          seasonId: task.seasonId,
+          ...actorFields(actor),
+        })),
+      )
+      .onConflictDoNothing(),
+  ]);
+}
+
+export { violatedConstraint } from "./db-errors";
 
 /**
  * Turns a Postgres constraint violation into a message an admin can act on.
  * Returns `undefined` for anything unexpected so callers can rethrow.
  */
 export function describeWriteError(error: unknown): string | undefined {
-  for (let e: unknown = error; e && typeof e === "object";) {
+  for (let e: unknown = error; e && typeof e === "object"; ) {
     const { code, constraint } = e as { code?: string; constraint?: string };
     if (constraint && CONSTRAINT_MESSAGES[constraint]) {
       return CONSTRAINT_MESSAGES[constraint];

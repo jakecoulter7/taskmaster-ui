@@ -3,29 +3,198 @@ import AdminLayout from "../../../layouts/AdminLayout.astro";
 import TerminalWindow from "../../../components/TerminalWindow.astro";
 import PollStatusBadge from "../../../components/PollStatusBadge.astro";
 import Notice from "../../../components/admin/Notice.astro";
+import Pagination from "../../../components/Pagination.astro";
 import {
   btnGhost,
   btnPrimary,
   tableCell,
   tableHead,
 } from "../../../components/admin/styles";
-import { listChangelog } from "../../../data/admin";
+import {
+  clearDealOverride,
+  describeWriteError,
+  getDailyBonusSchedule,
+  listBundles,
+  listChangelog,
+  listDealOverrides,
+  listFeatureFlags,
+  listMiniTasks,
+  listShopItems,
+  setDealOverride,
+  setFeatureFlag,
+} from "../../../data/admin";
+import AdminField from "../../../components/admin/AdminField.astro";
+import {
+  dealWeekBounds,
+  dealWeekStart,
+  mapDealOverrides,
+  pickDeal,
+} from "../../../data/shop-extras";
+import { mapShopItems } from "../../../data/coins";
+import { DEAL_DISCOUNT_PERCENT, dealPrice, getCrate } from "../../../data/coin-rules";
+import {
+  inputClass,
+  labelClass,
+} from "../../../components/admin/styles";
+import { deriveMiniTaskStatus, ukToday } from "../../../data/mini-tasks";
+import CoinAmount from "../../../components/CoinAmount.astro";
+import type { MiniTaskStatus } from "../../../types";
+import { FEATURE_FLAGS } from "../../../data/feature-flags";
+import {
+  parseDealForm,
+  parseFeatureFlagForm,
+  type FieldErrors,
+  type FormValues,
+} from "../../../lib/admin-forms";
+import {
+  CATEGORY_INFO,
+  POWER_UP_INFO,
+  COSMETIC_KIND_LABELS,
+} from "../../../data/coins";
 import { withBase } from "../../../lib/url";
 import { ukDateFormat } from "../../../lib/time";
+import {
+  LIST_PAGE_SIZE,
+  pageHref,
+  paginate,
+  parsePage,
+} from "../../../lib/pagination";
 
 // Fail closed if the middleware guard is ever bypassed.
-if (!Astro.locals.admin) return Astro.redirect(withBase("/login"));
+const admin = Astro.locals.admin;
+if (!admin) return Astro.redirect(withBase("/login"));
 
-const [{ getPollSummaries, players }, changelog] = await Promise.all([
+// Forms posted here: a feature flag toggle, and the deal of the week
+// override (set or cleared, by `intent`).
+let dealValues: FormValues = { discountPercent: String(DEAL_DISCOUNT_PERCENT) };
+let dealErrors: FieldErrors = {};
+let dealError: string | undefined;
+const form =
+  Astro.request.method === "POST" ? await Astro.request.formData() : undefined;
+if (form?.get("intent") === "clear-deal") {
+  const weekStart = String(form.get("weekStart") ?? "");
+  await clearDealOverride(weekStart);
+  const query = new URLSearchParams({ done: "deal-cleared", name: weekStart });
+  return Astro.redirect(withBase(`/admin/site?${query}#deal`), 303);
+}
+if (form?.get("intent") === "deal") {
+  const parsed = parseDealForm(form);
+  dealValues = parsed.values;
+  if (!parsed.ok) {
+    dealErrors = parsed.errors;
+  } else {
+    try {
+      await setDealOverride(parsed.data, admin);
+      const query = new URLSearchParams({
+        done: "deal-set",
+        name: parsed.data.weekStart,
+      });
+      return Astro.redirect(withBase(`/admin/site?${query}#deal`), 303);
+    } catch (error) {
+      dealError = describeWriteError(error);
+      if (!dealError) throw error;
+    }
+  }
+} else if (form) {
+  const toggle = parseFeatureFlagForm(form);
+  if (!toggle) return Astro.redirect(withBase("/admin/site#flags"), 303);
+  await setFeatureFlag(toggle.key, toggle.enabled, admin);
+  const query = new URLSearchParams({
+    done: toggle.enabled ? "flag-on" : "flag-off",
+    name: FEATURE_FLAGS[toggle.key].label,
+  });
+  return Astro.redirect(withBase(`/admin/site?${query}#flags`), 303);
+}
+
+// Mini-tasks belong to a season: this screen lists the current one's.
+const currentSeason = (await Astro.locals.getSeasons()).current;
+const [
+  { getPollSummaries, players },
+  changelog,
+  shop,
+  flags,
+  miniTasks,
+  bundles,
+  dealRows,
+  dailyBonus,
+] = await Promise.all([
   Astro.locals.getQueries(),
   listChangelog(),
+  listShopItems(),
+  listFeatureFlags(),
+  currentSeason ? listMiniTasks(currentSeason.id) : Promise.resolve([]),
+  listBundles(),
+  listDealOverrides(),
+  currentSeason ? getDailyBonusSchedule(currentSeason.id) : undefined,
 ]);
+// The deal of the week: this week's (automatic or picked) and the picks
+// made for the weeks ahead.
+const catalogue = mapShopItems(shop);
+const overrides = mapDealOverrides(dealRows);
+const thisWeek = dealWeekStart();
+const currentDeal = pickDeal(catalogue, overrides);
+const upcomingOverrides = overrides
+  .filter((o) => o.weekStart >= thisWeek)
+  .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+const dealWeeks = [0, 1, 2, 3].map((n) => {
+  const start = new Date(`${thisWeek}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() + n * 7);
+  const weekStart = start.toISOString().slice(0, 10);
+  return { weekStart, label: n === 0 ? `this week (${weekStart})` : weekStart };
+});
+const dealItems = catalogue.filter(
+  (item) => item.available && !item.crateOnly && !item.skillOnly,
+);
+const itemName = new Map(catalogue.map((item) => [item.id, item.name]));
+const dealsOn = flags.find((f) => f.key === "shop_deals")?.enabled ?? false;
+const bundlesOn = flags.find((f) => f.key === "shop_bundles")?.enabled ?? false;
+const dayFmt = ukDateFormat({ weekday: "short", day: "numeric", month: "short" });
+const today = ukToday();
+const miniTaskPage = paginate(
+  miniTasks,
+  parsePage(Astro.url.searchParams.get("minitasks")),
+  LIST_PAGE_SIZE,
+);
+const miniTaskHref = (page: number) =>
+  pageHref(Astro.url, "minitasks", page, {
+    hash: "mini-tasks",
+    drop: ["done", "name"],
+  });
+const miniTaskState: Record<MiniTaskStatus, { label: string; class: string }> =
+  {
+    active: { label: "● RUNNING", class: "text-amber" },
+    upcoming: { label: "UPCOMING", class: "text-ink-faint" },
+    ended: { label: "✓ ENDED", class: "text-acid" },
+  };
 const summaries = getPollSummaries();
+const changelogPage = paginate(
+  changelog,
+  parsePage(Astro.url.searchParams.get("changelog")),
+  LIST_PAGE_SIZE,
+);
+const changelogHref = (page: number) =>
+  pageHref(Astro.url, "changelog", page, {
+    hash: "changelog",
+    drop: ["done", "name"],
+  });
 const categoryClass: Record<string, string> = {
   new: "text-acid",
   improved: "text-cyan",
   fixed: "text-amber",
 };
+const shopPage = paginate(
+  shop,
+  parsePage(Astro.url.searchParams.get("shop")),
+  LIST_PAGE_SIZE,
+);
+const shopHref = (page: number) =>
+  pageHref(Astro.url, "shop", page, { hash: "shop", drop: ["done", "name"] });
+const itemKind = (item: (typeof shop)[number]) =>
+  item.powerUp
+    ? POWER_UP_INFO[item.powerUp].label
+    : item.cosmeticKind
+      ? `${COSMETIC_KIND_LABELS[item.cosmeticKind]}: ${item.cosmeticValue}`
+      : CATEGORY_INFO[item.category].label;
 const done = Astro.url.searchParams.get("done");
 const subject = Astro.url.searchParams.get("name");
 
@@ -39,24 +208,101 @@ const stamp = ukDateFormat({
 const fmt = (iso: string) => stamp.format(new Date(iso));
 ---
 
-<AdminLayout title="Polls & changelog">
+<AdminLayout title="Polls, mini-tasks, changelog & shop">
   <h1 class="text-2xl font-extrabold tracking-tight text-ink">
     <span class="text-acid">$</span> ls ~/site
   </h1>
   <p class="mt-1 max-w-prose text-sm text-ink-dim">
-    The extras on the homepage: polls for players to vote on, and the "what's
-    new" list.
+    The extras around the competition: feature flags, polls for players to vote
+    on, mini-tasks, the "what's new" list, and the Clim Coin shop (with its
+    bundles and deal of the week).
   </p>
 
   {
     done && subject && (
       <Notice tone="success" class="mt-6">
-        {done === "deleted" ? `Deleted "${subject}".` : `Saved "${subject}".`}
+        {done === "deleted"
+          ? `Deleted "${subject}".`
+          : done === "flag-on"
+            ? `Turned on "${subject}".`
+            : done === "flag-off"
+              ? `Turned off "${subject}".`
+              : done === "deal-set"
+                ? `Set the deal for the week of ${subject}.`
+                : done === "deal-cleared"
+                  ? `The week of ${subject} is back on the automatic deal.`
+                  : `Saved "${subject}".`}
       </Notice>
     )
   }
 
-  <section id="polls" aria-labelledby="polls-heading" class="mt-8 scroll-mt-24">
+  <section id="flags" aria-labelledby="flags-heading" class="mt-8 scroll-mt-24">
+    <h2
+      id="flags-heading"
+      class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      feature flags ({flags.length})
+    </h2>
+    <p class="mt-1 text-xs text-ink-faint">
+      Switch site features on or off for everyone, straight away. New features
+      start off.
+    </p>
+    <TerminalWindow title="~/site/flags" class="mt-3">
+      <ul class="divide-y divide-grid/60">
+        {
+          flags.map((flag) => (
+            <li class="flex flex-wrap items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+              <div class="min-w-0 max-w-prose">
+                <p class="flex flex-wrap items-center gap-2 text-sm font-bold text-ink">
+                  {flag.label}
+                  <span
+                    class:list={[
+                      "rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest",
+                      flag.enabled
+                        ? "border-acid/50 bg-acid/10 text-acid"
+                        : "border-grid text-ink-faint",
+                    ]}
+                  >
+                    {flag.enabled ? "on" : "off"}
+                  </span>
+                  <code class="text-[10px] font-normal text-ink-faint">
+                    {flag.key}
+                  </code>
+                </p>
+                <p class="mt-1 text-xs text-ink-dim">{flag.description}</p>
+                {flag.changedBy && flag.changedAt && (
+                  <p class="mt-1 text-[11px] text-ink-faint">
+                    Last changed by {flag.changedBy} · {fmt(flag.changedAt)}
+                  </p>
+                )}
+              </div>
+              <form method="post">
+                <input type="hidden" name="key" value={flag.key} />
+                <input
+                  type="hidden"
+                  name="enabled"
+                  value={flag.enabled ? "off" : "on"}
+                />
+                <button
+                  type="submit"
+                  class={flag.enabled ? btnGhost : btnPrimary}
+                >
+                  {flag.enabled ? "turn off" : "turn on"}
+                  <span class="sr-only"> {flag.label}</span>
+                </button>
+              </form>
+            </li>
+          ))
+        }
+      </ul>
+    </TerminalWindow>
+  </section>
+
+  <section
+    id="polls"
+    aria-labelledby="polls-heading"
+    class="mt-10 scroll-mt-24"
+  >
     <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2
@@ -157,6 +403,186 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
   </section>
 
   <section
+    id="mini-tasks"
+    aria-labelledby="mini-tasks-heading"
+    class="mt-10 scroll-mt-24"
+  >
+    <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2
+          id="mini-tasks-heading"
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+        >
+          mini-tasks ({miniTasks.length})
+        </h2>
+        <p class="mt-1 max-w-prose text-xs text-ink-faint">
+          Daily and bonus extras for {currentSeason?.name ?? "the season"},
+          worth 1–5 Clim Coin. Open one to tick off who did it; players see them
+          while the "Mini-tasks" flag is on.
+        </p>
+      </div>
+      {
+        currentSeason && currentSeason.status !== "closed" && (
+          <a href={withBase("/admin/mini-tasks/new")} class={btnGhost}>
+            + new mini-task
+          </a>
+        )
+      }
+    </div>
+    <TerminalWindow title="~/site/mini-tasks" bodyClass="p-0 sm:p-0">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr>
+              <th scope="col" class={tableHead}>runs</th>
+              <th scope="col" class={tableHead}>status</th>
+              <th scope="col" class={tableHead}>mini-task</th>
+              <th scope="col" class={tableHead}>reward</th>
+              <th scope="col" class={tableHead}>done</th>
+              <th scope="col" class={tableHead}
+                ><span class="sr-only">actions</span></th
+              >
+            </tr>
+          </thead>
+          <tbody>
+            {
+              miniTaskPage.items.map((row) => {
+                const state = miniTaskState[deriveMiniTaskStatus(row, today)];
+                return (
+                  <tr class="transition-colors hover:bg-term-panel-2">
+                    <td
+                      class:list={[
+                        tableCell,
+                        "whitespace-nowrap tabular-nums text-ink-faint",
+                      ]}
+                    >
+                      {row.startsOn === row.endsOn
+                        ? row.startsOn
+                        : `${row.startsOn} → ${row.endsOn}`}
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "whitespace-nowrap text-[10px] font-bold tracking-widest",
+                        state.class,
+                      ]}
+                    >
+                      {state.label}
+                    </td>
+                    <td class={tableCell}>
+                      <span class="text-ink">{row.title}</span>
+                      {row.description && (
+                        <span class="block max-w-prose text-xs text-ink-faint">
+                          {row.description}
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      class:list={[tableCell, "whitespace-nowrap text-amber"]}
+                    >
+                      <CoinAmount amount={row.reward} />
+                    </td>
+                    <td class:list={[tableCell, "tabular-nums text-ink-dim"]}>
+                      {row.completions}
+                    </td>
+                    <td
+                      class:list={[tableCell, "text-right whitespace-nowrap"]}
+                    >
+                      <a
+                        href={withBase(`/admin/mini-tasks/${row.id}`)}
+                        class="text-cyan hover:underline"
+                        aria-label={`Tick off or edit ${row.title}`}
+                      >
+                        tick off
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })
+            }
+          </tbody>
+        </table>
+        {
+          miniTasks.length === 0 && (
+            <p class="p-6 text-sm text-ink-dim">
+              No mini-tasks this season yet.
+            </p>
+          )
+        }
+      </div>
+    </TerminalWindow>
+    <Pagination
+      info={miniTaskPage}
+      href={miniTaskHref}
+      label="Mini-task pages"
+      itemLabel="mini-tasks"
+      class="mt-3"
+    />
+  </section>
+
+  <section
+    id="daily-bonus"
+    aria-labelledby="daily-bonus-heading"
+    class="mt-10 scroll-mt-24"
+  >
+    <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2
+          id="daily-bonus-heading"
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+        >
+          daily bonus
+        </h2>
+        <p class="mt-1 max-w-prose text-xs text-ink-faint">
+          The 7-day sign-in streak for {currentSeason?.name ?? "the season"}.
+          Players claim it from their account while the "Daily sign-in bonus"
+          flag is on.
+        </p>
+      </div>
+      {
+        currentSeason && currentSeason.status !== "closed" && (
+          <a href={withBase("/admin/daily-bonus")} class={btnGhost}>
+            edit schedule
+          </a>
+        )
+      }
+    </div>
+    <TerminalWindow
+      title="~/site/daily-bonus"
+      meta={dailyBonus
+        ? `${dailyBonus.customised ? "custom" : "default"} · ${dailyBonus.claims} claimed`
+        : undefined}
+    >
+      {
+        dailyBonus ? (
+          <ol class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:grid-cols-7">
+            {dailyBonus.rewards.map((reward) => {
+              const extra = reward.itemId
+                ? (itemName.get(reward.itemId) ?? reward.itemId)
+                : reward.crateId
+                  ? (getCrate(reward.crateId)?.name ?? reward.crateId)
+                  : undefined;
+              return (
+                <li class="rounded-md border border-grid p-2">
+                  <span class="block text-[10px] font-bold uppercase tracking-widest text-ink-dim">
+                    day {reward.day}
+                  </span>
+                  {reward.coins > 0 && (
+                    <CoinAmount amount={reward.coins} class="text-amber" />
+                  )}
+                  {extra && <span class="block text-ink">+ {extra}</span>}
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <p class="text-sm text-ink-dim">There's no current season yet.</p>
+        )
+      }
+    </TerminalWindow>
+  </section>
+
+  <section
     id="changelog"
     aria-labelledby="changelog-heading"
     class="mt-10 scroll-mt-24"
@@ -192,7 +618,7 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
           </thead>
           <tbody>
             {
-              changelog.map((row) => (
+              changelogPage.items.map((row) => (
                 <tr class="transition-colors hover:bg-term-panel-2">
                   <td
                     class:list={[
@@ -236,6 +662,360 @@ const fmt = (iso: string) => stamp.format(new Date(iso));
             <p class="p-6 text-sm text-ink-dim">No entries yet.</p>
           )
         }
+      </div>
+    </TerminalWindow>
+    <Pagination
+      info={changelogPage}
+      href={changelogHref}
+      label="Changelog pages"
+      itemLabel="entries"
+      class="mt-3"
+    />
+  </section>
+
+  <section id="shop" aria-labelledby="shop-heading" class="mt-10 scroll-mt-24">
+    <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2
+          id="shop-heading"
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+        >
+          clim coin shop ({shop.length})
+        </h2>
+        <p class="mt-1 text-xs text-ink-faint">
+          What players can spend Clim Coin on, site-wide. Pets, avatars and
+          cosmetics also hatch from mystery eggs (rarity follows the price) when
+          the <a href="#flags" class="text-cyan hover:underline"
+            >mystery eggs flag</a
+          > is on. Retired items stay with their owners and stop dropping; items nobody
+          owns can be deleted.
+        </p>
+      </div>
+      <span class="flex flex-wrap gap-2">
+        <a href={withBase("/admin/market")} class={btnGhost}>marketplace →</a>
+        <a href={withBase("/admin/shop/new")} class={btnGhost}>+ new item</a>
+      </span>
+    </div>
+    <TerminalWindow title="~/site/shop" bodyClass="p-0 sm:p-0">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr>
+              <th scope="col" class={tableHead}>item</th>
+              <th scope="col" class:list={[tableHead, "hidden md:table-cell"]}>
+                kind
+              </th>
+              <th scope="col" class={tableHead}>price</th>
+              <th scope="col" class={tableHead}>sold</th>
+              <th scope="col" class={tableHead}
+                ><span class="sr-only">actions</span></th
+              >
+            </tr>
+          </thead>
+          <tbody>
+            {
+              shopPage.items.map((item) => (
+                <tr class="transition-colors hover:bg-term-panel-2">
+                  <td class={tableCell}>
+                    <span class="text-ink">{item.name}</span>
+                    {!item.available && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-ink-faint">
+                        retired
+                      </span>
+                    )}
+                    {item.skillOnly && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-cyan">
+                        skill reward
+                      </span>
+                    )}
+                    {item.crateOnly && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-magenta">
+                        {item.crateId ? `${item.crateId} only` : "egg only"}
+                      </span>
+                    )}
+                    {(item.availableFrom || item.availableUntil) && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-amber">
+                        limited
+                        {item.availableUntil &&
+                          ` · until ${item.availableUntil.slice(0, 16)}`}
+                      </span>
+                    )}
+                    {item.stock !== null && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-cyan">
+                        stock {item.stock}/season
+                      </span>
+                    )}
+                  </td>
+                  <td
+                    class:list={[
+                      tableCell,
+                      "hidden text-xs text-ink-dim md:table-cell",
+                    ]}
+                  >
+                    {itemKind(item)}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-amber"]}>
+                    {item.price}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-ink-dim"]}>
+                    {item.purchases}
+                  </td>
+                  <td class:list={[tableCell, "text-right whitespace-nowrap"]}>
+                    <a
+                      href={withBase(`/admin/shop/${item.id}`)}
+                      class="text-cyan hover:underline"
+                      aria-label={`Edit ${item.name}`}
+                    >
+                      edit
+                    </a>
+                  </td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+        {
+          shop.length === 0 && (
+            <p class="p-6 text-sm text-ink-dim">
+              The shop is empty.{" "}
+              <a
+                href={withBase("/admin/shop/new")}
+                class="text-cyan hover:underline"
+              >
+                Add an item
+              </a>
+              .
+            </p>
+          )
+        }
+      </div>
+    </TerminalWindow>
+    <Pagination
+      info={shopPage}
+      href={shopHref}
+      label="Shop pages"
+      itemLabel="items"
+      class="mt-3"
+    />
+  </section>
+
+  <section
+    id="bundles"
+    aria-labelledby="bundles-heading"
+    class="mt-10 scroll-mt-24"
+  >
+    <div class="mb-3 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h2
+          id="bundles-heading"
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+        >
+          bundles ({bundles.length})
+        </h2>
+        <p class="mt-1 text-xs text-ink-faint">
+          Several shop items for one price, on the shop's featured tab while the{" "}
+          <a href="#flags" class="text-cyan hover:underline">bundles flag</a> is{" "}
+          {bundlesOn ? "on" : "off (it's off now)"}. Players who've had any of
+          a bundle's items can't buy it.
+        </p>
+      </div>
+      <a href={withBase("/admin/shop/bundles/new")} class={btnGhost}>
+        + new bundle
+      </a>
+    </div>
+    <TerminalWindow title="~/site/bundles" bodyClass="p-0 sm:p-0">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr>
+              <th scope="col" class={tableHead}>bundle</th>
+              <th scope="col" class:list={[tableHead, "hidden md:table-cell"]}>
+                items
+              </th>
+              <th scope="col" class={tableHead}>price</th>
+              <th scope="col" class={tableHead}>sold</th>
+              <th scope="col" class={tableHead}
+                ><span class="sr-only">actions</span></th
+              >
+            </tr>
+          </thead>
+          <tbody>
+            {
+              bundles.map((bundle) => (
+                <tr class="transition-colors hover:bg-term-panel-2">
+                  <td class={tableCell}>
+                    <span class="text-ink">{bundle.name}</span>
+                    {!bundle.available && (
+                      <span class="ml-2 text-[10px] font-bold uppercase tracking-widest text-ink-faint">
+                        retired
+                      </span>
+                    )}
+                  </td>
+                  <td
+                    class:list={[
+                      tableCell,
+                      "hidden text-xs text-ink-dim md:table-cell",
+                    ]}
+                  >
+                    {bundle.itemIds
+                      .map((id) => itemName.get(id) ?? id)
+                      .join(", ")}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-amber"]}>
+                    {bundle.price}
+                  </td>
+                  <td class:list={[tableCell, "tabular-nums text-ink-dim"]}>
+                    {bundle.purchases}
+                  </td>
+                  <td class:list={[tableCell, "text-right whitespace-nowrap"]}>
+                    <a
+                      href={withBase(`/admin/shop/bundles/${bundle.id}`)}
+                      class="text-cyan hover:underline"
+                      aria-label={`Edit ${bundle.name}`}
+                    >
+                      edit
+                    </a>
+                  </td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+        {
+          bundles.length === 0 && (
+            <p class="p-6 text-sm text-ink-dim">
+              No bundles yet.{" "}
+              <a
+                href={withBase("/admin/shop/bundles/new")}
+                class="text-cyan hover:underline"
+              >
+                Make one
+              </a>
+              .
+            </p>
+          )
+        }
+      </div>
+    </TerminalWindow>
+  </section>
+
+  <section id="deal" aria-labelledby="deal-heading" class="mt-10 scroll-mt-24">
+    <h2
+      id="deal-heading"
+      class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      deal of the week
+    </h2>
+    <p class="mt-1 mb-3 text-xs text-ink-faint">
+      Each week (Monday to Monday, UK time) one item sells at a discount: {
+        DEAL_DISCOUNT_PERCENT
+      }% off an automatic pick, unless you choose the item and discount
+      yourself. Shown while the{" "}
+      <a href="#flags" class="text-cyan hover:underline">deal of the week flag</a
+      > is {dealsOn ? "on" : "off (it's off now)"}.
+    </p>
+    <TerminalWindow title="~/site/deal" meta={`week of ${thisWeek}`}>
+      <div class="space-y-5">
+        {
+          currentDeal ? (
+            <p class="text-sm text-ink-dim">
+              <span class="text-magenta">%</span> This week:{" "}
+              <span class="font-bold text-ink">{currentDeal.item.name}</span>,{" "}
+              {currentDeal.discountPercent}% off (
+              {dealPrice(currentDeal.item.price, currentDeal.discountPercent)}{" "}
+              instead of {currentDeal.item.price}),{" "}
+              {currentDeal.automatic ? "picked automatically" : "picked by you"}
+              . Ends{" "}
+              {dayFmt.format(
+                new Date(dealWeekBounds(currentDeal.weekStart).endsAt),
+              )}
+              .
+            </p>
+          ) : (
+            <p class="text-sm text-ink-dim">
+              Nothing in the shop can be the deal this week.
+            </p>
+          )
+        }
+        {
+          upcomingOverrides.length > 0 && (
+            <ul class="divide-y divide-grid/60 rounded-md border border-grid text-sm">
+              {upcomingOverrides.map((o) => (
+                <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                  <span class="text-ink-dim">
+                    <span class="text-ink-faint tabular-nums">
+                      {o.weekStart}
+                    </span>{" "}
+                    <span class="font-bold text-ink">
+                      {itemName.get(o.itemId) ?? o.itemId}
+                    </span>{" "}
+                    · {o.discountPercent}% off · by {o.actorName}
+                  </span>
+                  <form method="post">
+                    <input type="hidden" name="intent" value="clear-deal" />
+                    <input type="hidden" name="weekStart" value={o.weekStart} />
+                    <button type="submit" class="text-xs text-cyan hover:underline">
+                      back to automatic
+                    </button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        <form method="post" class="grid gap-4 sm:grid-cols-[1fr_1fr_8rem_auto] sm:items-end" novalidate>
+          <input type="hidden" name="intent" value="deal" />
+          {dealError && (
+            <p class="text-xs text-danger sm:col-span-4">{dealError}</p>
+          )}
+          <label class="block">
+            <span class={labelClass}>week</span>
+            <select
+              name="weekStart"
+              class:list={[inputClass(Boolean(dealErrors.weekStart)), "mt-1"]}
+            >
+              {dealWeeks.map((week) => (
+                <option
+                  value={week.weekStart}
+                  selected={dealValues.weekStart === week.weekStart}
+                >
+                  {week.label}
+                </option>
+              ))}
+            </select>
+            {dealErrors.weekStart && (
+              <span class="mt-1 block text-xs text-danger">
+                {dealErrors.weekStart}
+              </span>
+            )}
+          </label>
+          <label class="block">
+            <span class={labelClass}>item</span>
+            <select
+              name="itemId"
+              class:list={[inputClass(Boolean(dealErrors.itemId)), "mt-1"]}
+            >
+              {dealItems.map((item) => (
+                <option value={item.id} selected={dealValues.itemId === item.id}>
+                  {item.name} ({item.price})
+                </option>
+              ))}
+            </select>
+            {dealErrors.itemId && (
+              <span class="mt-1 block text-xs text-danger">
+                {dealErrors.itemId}
+              </span>
+            )}
+          </label>
+          <AdminField
+            label="% off"
+            name="discountPercent"
+            type="number"
+            value={dealValues.discountPercent}
+            error={dealErrors.discountPercent}
+          />
+          <button type="submit" class={btnPrimary}>set deal</button>
+        </form>
       </div>
     </TerminalWindow>
   </section>

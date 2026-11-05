@@ -1,0 +1,52 @@
+---
+// The power-ups used on a week, public as soon as they're used (so a
+// Sabotage or Heist always names who did it). Oldest first. Once the week's
+// results are out, one a Shield blocked or a Mirror bounced says so.
+import type { PowerUpFeedEntry } from "../types";
+import { POWER_UP_GLYPH } from "../lib/coin-ui";
+import { withBase } from "../lib/url";
+
+interface Props {
+  entries: PowerUpFeedEntry[];
+  class?: string;
+}
+
+const { entries, class: className } = Astro.props;
+---
+
+<ul class:list={["space-y-2 text-sm", className]}>
+  {
+    entries.map((entry) => (
+      <li class="flex items-baseline gap-2">
+        <span
+          aria-hidden="true"
+          class:list={[
+            "w-6 shrink-0 text-center font-extrabold",
+            POWER_UP_GLYPH[entry.copiedEffect ?? entry.effect].class,
+          ]}
+        >
+          {POWER_UP_GLYPH[entry.copiedEffect ?? entry.effect].glyph}
+        </span>
+        <span class="text-ink-dim">
+          <a
+            href={withBase(`/players/${entry.player.id}`)}
+            class="font-bold text-ink hover:text-acid"
+          >
+            {entry.player.name}
+          </a>{" "}
+          {entry.label}
+          {entry.outcome === "blocked" && (
+            <span class="ml-1 text-[10px] font-bold uppercase tracking-widest text-cyan">
+              ◈ shielded
+            </span>
+          )}
+          {entry.outcome === "reflected" && (
+            <span class="ml-1 text-[10px] font-bold uppercase tracking-widest text-magenta">
+              ⇄ mirrored
+            </span>
+          )}
+        </span>
+      </li>
+    ))
+  }
+</ul>

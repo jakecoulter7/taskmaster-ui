@@ -1,0 +1,93 @@
+---
+// Gift wrap in the shop: buy a pet, avatar or cosmetic for someone else in
+// your season, with a note and an optional anonymous sender. Posts to
+// `/account/shop-extras`; the write checks they don't already have it.
+import type { GiftWrapPanel } from "../types";
+import TerminalWindow from "./TerminalWindow.astro";
+import { GIFT_MESSAGE_MAX } from "../data/coin-rules";
+import { GIFT_WRAP_BLOCK_LABEL } from "../lib/coin-ui";
+import { btnPrimary, inputClass, labelClass } from "./admin/styles";
+import { withBase } from "../lib/url";
+
+interface Props {
+  panel: GiftWrapPanel;
+  class?: string;
+}
+
+const { panel, class: className } = Astro.props;
+---
+
+<TerminalWindow
+  title="~/extras/gift-wrap"
+  meta={`+${panel.fee} coin wrap fee`}
+  class={className}
+>
+  <div id="gift-wrap" class="scroll-mt-24 space-y-4">
+    <p class="text-sm text-ink-dim">
+      <span class="text-amber">&gt;</span> Buy a pet, avatar or cosmetic for
+      another player who doesn't have it yet, for its price plus a {panel.fee}-coin
+      wrap fee. Add a note, and stay anonymous if you like.
+    </p>
+    {
+      panel.blocked ? (
+        <p class="text-xs text-ink-faint">
+          {GIFT_WRAP_BLOCK_LABEL[panel.blocked]}
+        </p>
+      ) : (
+        <form
+          method="post"
+          action={withBase("/account/shop-extras")}
+          class="grid gap-3 sm:grid-cols-2"
+        >
+          <input type="hidden" name="intent" value="wrap" />
+          <label class="block">
+            <span class={labelClass}>gift</span>
+            <select
+              name="itemId"
+              required
+              class:list={[inputClass(false), "mt-1"]}
+            >
+              {panel.items.map(({ item, price }) => (
+                <option value={item.id}>
+                  {item.name} · {price + panel.fee} coins
+                </option>
+              ))}
+            </select>
+          </label>
+          <label class="block">
+            <span class={labelClass}>for</span>
+            <select
+              name="toPlayerId"
+              required
+              class:list={[inputClass(false), "mt-1"]}
+            >
+              {panel.recipients.map((player) => (
+                <option value={player.id}>{player.name}</option>
+              ))}
+            </select>
+          </label>
+          <label class="block sm:col-span-2">
+            <span class={labelClass}>note (optional)</span>
+            <input
+              type="text"
+              name="message"
+              maxlength={GIFT_MESSAGE_MAX}
+              placeholder="saw this and thought of you"
+              class:list={[inputClass(false), "mt-1"]}
+            />
+          </label>
+          <label class="flex items-center gap-2 text-xs text-ink-dim sm:col-span-2">
+            <input type="checkbox" name="anonymous" class="accent-acid" />
+            send anonymously (they'll see "a secret admirer")
+          </label>
+          <div class="sm:col-span-2">
+            <button type="submit" class={btnPrimary}>wrap &amp; send</button>
+            <span class="ml-3 text-[11px] text-ink-faint">
+              prices include the wrap fee
+            </span>
+          </div>
+        </form>
+      )
+    }
+  </div>
+</TerminalWindow>

@@ -1,0 +1,142 @@
+---
+// The weekly raffle in the shop: this week's pot and the viewer's tickets,
+// a form to buy more (a POST to `/account/shop-extras`), and past winners.
+import type { RafflePanel } from "../types";
+import TerminalWindow from "./TerminalWindow.astro";
+import CoinAmount from "./CoinAmount.astro";
+import { RAFFLE_BLOCK_LABEL } from "../lib/coin-ui";
+import { btnPrimary, inputClass, labelClass } from "./admin/styles";
+import { ukDateFormat } from "../lib/time";
+import { withBase } from "../lib/url";
+
+interface Props {
+  panel: RafflePanel;
+  class?: string;
+}
+
+const { panel, class: className } = Astro.props;
+const weekLabel = (n: number) => `Week ${String(n).padStart(2, "0")}`;
+const deadlineFmt = ukDateFormat({
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const recent = panel.draws.slice(0, 5);
+---
+
+<TerminalWindow
+  title="~/extras/raffle.sh"
+  meta={panel.task ? weekLabel(panel.task.weekNumber) : "no live week"}
+  class={className}
+>
+  <div id="raffle" class="scroll-mt-24 space-y-4">
+    <p class="text-sm text-ink-dim">
+      <span class="text-amber">&gt;</span> Buy up to {panel.maxTickets} tickets
+      a week at {panel.ticketPrice} coins each. When the week's deadline passes,
+      one ticket wins the whole pot. More tickets, better odds.
+    </p>
+    {
+      panel.task && (
+        <dl class="grid grid-cols-3 gap-3 text-center">
+          <div class="rounded-md border border-amber/40 bg-amber/5 p-3">
+            <dt class="text-[10px] uppercase tracking-[0.25em] text-ink-faint">
+              pot
+            </dt>
+            <dd class="mt-1">
+              <CoinAmount amount={panel.pot} class="text-xl text-amber" />
+            </dd>
+          </div>
+          <div class="rounded-md border border-grid p-3">
+            <dt class="text-[10px] uppercase tracking-[0.25em] text-ink-faint">
+              tickets in
+            </dt>
+            <dd class="mt-1 text-xl font-extrabold text-ink tabular-nums">
+              {panel.totalTickets}
+            </dd>
+          </div>
+          <div class="rounded-md border border-grid p-3">
+            <dt class="text-[10px] uppercase tracking-[0.25em] text-ink-faint">
+              yours
+            </dt>
+            <dd class="mt-1 text-xl font-extrabold text-acid tabular-nums">
+              {panel.myTickets}
+              <span class="text-xs font-normal text-ink-faint">
+                /{panel.maxTickets}
+              </span>
+            </dd>
+          </div>
+        </dl>
+      )
+    }
+    {
+      panel.task && (
+        <p class="text-[11px] text-ink-faint">
+          drawn at the deadline:{" "}
+          <time datetime={panel.task.deadline}>
+            {deadlineFmt.format(new Date(panel.task.deadline))}
+          </time>
+        </p>
+      )
+    }
+    {
+      panel.blocked ? (
+        <p class="text-xs text-ink-faint">
+          {RAFFLE_BLOCK_LABEL[panel.blocked]}
+        </p>
+      ) : (
+        panel.task && (
+          <form
+            method="post"
+            action={withBase("/account/shop-extras")}
+            class="flex flex-wrap items-end gap-3"
+          >
+            <input type="hidden" name="intent" value="raffle" />
+            <input type="hidden" name="taskId" value={panel.task.id} />
+            <label class="block w-28">
+              <span class={labelClass}>tickets</span>
+              <input
+                type="number"
+                name="count"
+                required
+                min="1"
+                max={panel.canBuy}
+                value="1"
+                inputmode="numeric"
+                class:list={[inputClass(false), "mt-1"]}
+              />
+            </label>
+            <button type="submit" class={btnPrimary}>buy tickets</button>
+            <span class="text-[11px] text-ink-faint">
+              up to {panel.canBuy} more now
+            </span>
+          </form>
+        )
+      )
+    }
+    {
+      recent.length > 0 && (
+        <div>
+          <h3 class="text-[10px] font-bold uppercase tracking-[0.25em] text-ink-faint">
+            past draws
+          </h3>
+          <ul class="mt-2 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+            {recent.map((draw) => (
+              <li class="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                <span class="text-ink-dim">
+                  <span class="text-ink-faint">
+                    {weekLabel(draw.task.weekNumber)}:
+                  </span>{" "}
+                  <span class="font-bold text-ink">{draw.winner.name}</span>{" "}
+                  won from {draw.tickets} ticket{draw.tickets === 1 ? "" : "s"}
+                </span>
+                <CoinAmount amount={draw.pot} class="text-amber" />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )
+    }
+  </div>
+</TerminalWindow>

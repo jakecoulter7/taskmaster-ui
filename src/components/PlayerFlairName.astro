@@ -1,0 +1,55 @@
+---
+// A player's name as lists show it, with their Clim Coin flair: the name
+// colour they wear, a tiny icon of their equipped pet and their skill
+// pathway's sigil.
+import type { PlayerFlair } from "../types";
+import SkillSigil from "./SkillSigil.astro";
+import { NAME_COLOUR_CLASS } from "../lib/coin-ui";
+import { SKILL_ACCENT_CLASS } from "../lib/skill-ui";
+import { assetUrl } from "../lib/url";
+
+interface Props {
+  name: string;
+  flair?: PlayerFlair;
+  /** Classes for the name itself (weight, truncation, hover colour). */
+  class?: string;
+}
+
+const { name, flair, class: className } = Astro.props;
+---
+
+<span
+  class:list={[
+    "min-w-0 truncate",
+    flair?.nameColour ? NAME_COLOUR_CLASS[flair.nameColour] : "text-ink",
+    className,
+  ]}>{name}</span
+>
+{
+  flair?.pet && (
+    <img
+      src={assetUrl(flair.pet.imageUrl)}
+      alt=""
+      aria-hidden="true"
+      title={flair.pet.name}
+      loading="lazy"
+      width="16"
+      height="16"
+      class="h-4 w-4 shrink-0 [image-rendering:pixelated]"
+    />
+  )
+}
+{
+  flair?.skillPath && (
+    <span
+      title={flair.skillPath.name}
+      class:list={[
+        "inline-flex shrink-0",
+        SKILL_ACCENT_CLASS[flair.skillPath.accent].text,
+      ]}
+    >
+      <SkillSigil pathId={flair.skillPath.id} class="h-3 w-3" />
+      <span class="sr-only">({flair.skillPath.name})</span>
+    </span>
+  )
+}

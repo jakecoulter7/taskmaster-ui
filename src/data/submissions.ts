@@ -60,9 +60,9 @@ export async function getSubmission(
  * route. Only for pages already rendered per viewer (never shared-cached)
  * whose entries have passed the access check.
  */
-export function presignEntryMedia(
-  entries: SubmissionEntry[],
-): Promise<SubmissionEntry[]> {
+export function presignEntryMedia<T extends SubmissionEntry>(
+  entries: T[],
+): Promise<T[]> {
   return Promise.all(
     entries.map(async (entry) =>
       entry.mediaUrl && entry.objectKey
@@ -140,4 +140,28 @@ export async function deleteOwnSubmission(
     )
     .returning();
   return row && mapSubmission(row);
+}
+
+/**
+ * Rewrites one of the owner's entries: a text entry's body or a photo's
+ * caption. Returns whether a row was changed (false if it isn't theirs).
+ */
+export async function updateOwnSubmissionText(
+  id: number,
+  taskId: string,
+  owner: SubmissionOwnerRef,
+  text: string | null,
+): Promise<boolean> {
+  const rows = await getDb()
+    .update(taskSubmissions)
+    .set({ text })
+    .where(
+      and(
+        eq(taskSubmissions.id, id),
+        eq(taskSubmissions.taskId, taskId),
+        ownedBy(owner),
+      ),
+    )
+    .returning({ id: taskSubmissions.id });
+  return rows.length > 0;
 }

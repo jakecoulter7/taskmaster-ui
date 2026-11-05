@@ -1,0 +1,271 @@
+---
+import AdminLayout from "../../../layouts/AdminLayout.astro";
+import TerminalWindow from "../../../components/TerminalWindow.astro";
+import Notice from "../../../components/admin/Notice.astro";
+import {
+  btnGhost,
+  btnPrimary,
+  inputClass,
+  tableCell,
+  tableHead,
+} from "../../../components/admin/styles";
+import {
+  describeWriteError,
+  getDailyBonusSchedule,
+  listShopItems,
+  resetDailyBonusSchedule,
+  setDailyBonusSchedule,
+} from "../../../data/admin";
+import { CATEGORY_INFO } from "../../../data/coins";
+import { CRATES } from "../../../data/coin-rules";
+import {
+  DAILY_BONUS_DAYS,
+  DAILY_BONUS_MAX_COINS,
+  DAILY_BONUS_OWNED_ITEM_COINS,
+} from "../../../data/daily-bonus";
+import {
+  parseDailyBonusForm,
+  type FieldErrors,
+  type FormValues,
+} from "../../../lib/admin-forms";
+import { withBase } from "../../../lib/url";
+
+// Fail closed if the middleware guard is ever bypassed.
+if (!Astro.locals.admin) return Astro.redirect(withBase("/login"));
+
+// The schedule belongs to the current season; a closed one takes no edits.
+const season = (await Astro.locals.getSeasons()).current;
+const open = season !== undefined && season.status !== "closed";
+const self = withBase("/admin/daily-bonus");
+
+let values: FormValues | undefined;
+let errors: FieldErrors = {};
+let formError: string | undefined;
+
+if (Astro.request.method === "POST" && open) {
+  const form = await Astro.request.formData();
+  if (form.get("intent") === "reset") {
+    await resetDailyBonusSchedule(season.id);
+    return Astro.redirect(`${self}?done=reset`, 303);
+  }
+  const parsed = parseDailyBonusForm(form);
+  values = parsed.values;
+  if (!parsed.ok) {
+    errors = parsed.errors;
+  } else {
+    try {
+      await setDailyBonusSchedule(season.id, parsed.data);
+      return Astro.redirect(`${self}?done=saved`, 303);
+    } catch (error) {
+      formError = describeWriteError(error);
+      if (!formError) throw error;
+    }
+  }
+}
+
+const [schedule, items] = await Promise.all([
+  season ? getDailyBonusSchedule(season.id) : undefined,
+  listShopItems(),
+]);
+// The form shows what was submitted after an error, else the saved schedule.
+const fieldValue = (field: "coins" | "extra", day: number): string => {
+  if (values) return values[`${field}${day}`] ?? "";
+  const reward = schedule?.rewards.find((r) => r.day === day);
+  if (!reward) return "";
+  if (field === "coins") return String(reward.coins);
+  if (reward.itemId) return `item:${reward.itemId}`;
+  return reward.crateId ? `egg:${reward.crateId}` : "";
+};
+const itemGroups = Object.entries(CATEGORY_INFO).map(([category, info]) => ({
+  label: info.label,
+  items: items.filter((item) => item.category === category),
+}));
+const done = Astro.url.searchParams.get("done");
+const notices: Record<string, string> = {
+  saved: "Daily bonus schedule saved.",
+  reset: "Back on the default schedule.",
+};
+const notice = done ? notices[done] : undefined;
+const days = Array.from({ length: DAILY_BONUS_DAYS }, (_, i) => i + 1);
+---
+
+<AdminLayout title="Daily bonus">
+  <a href={withBase("/admin/site#daily-bonus")} class={btnGhost}>&larr; SITE</a>
+  <h1 class="mt-6 text-2xl font-extrabold tracking-tight text-ink">
+    <span class="text-acid">$</span> vim daily-bonus.cfg
+  </h1>
+  <p class="mt-1 max-w-prose text-sm text-ink-dim">
+    What each day of the {DAILY_BONUS_DAYS}-day sign-in streak pays. Players claim once a day
+    (UK time); missing a day starts them again at day 1, and after day {DAILY_BONUS_DAYS} the
+    cycle repeats. Each day can give coins plus one item or mystery egg. An item
+    a player already owns is swapped for {DAILY_BONUS_OWNED_ITEM_COINS} extra Clim
+    Coin. Eggs wait in their inventory and can only be cracked while the "Mystery
+    eggs" flag is on. Bonuses already claimed keep what they paid.
+  </p>
+
+  {
+    notice && (
+      <Notice tone="success" class="mt-6">
+        {notice}
+      </Notice>
+    )
+  }
+  {
+    formError && (
+      <Notice tone="error" class="mt-6">
+        {formError}
+      </Notice>
+    )
+  }
+
+  {
+    open && schedule ? (
+      <TerminalWindow
+        title={`~/seasons/${season.id}/daily-bonus.cfg`}
+        meta={`${schedule.customised ? "custom" : "default"} · ${schedule.claims} claimed`}
+        class="mt-6"
+        bodyClass="p-0 sm:p-0"
+      >
+        <form method="post" novalidate>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr>
+                  <th scope="col" class={tableHead}>
+                    day
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    coins
+                  </th>
+                  <th scope="col" class={tableHead}>
+                    plus an item or egg
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {days.map((day) => {
+                  const coinsError = errors[`coins${day}`];
+                  const extraError = errors[`extra${day}`];
+                  const extra = fieldValue("extra", day);
+                  return (
+                    <tr>
+                      <th
+                        scope="row"
+                        class:list={[
+                          tableCell,
+                          "whitespace-nowrap text-left font-bold",
+                          day === DAILY_BONUS_DAYS ? "text-magenta" : "text-ink-dim",
+                        ]}
+                      >
+                        day {day}
+                      </th>
+                      <td class:list={[tableCell, "w-32"]}>
+                        <label for={`coins${day}`} class="sr-only">
+                          Day {day} coins
+                        </label>
+                        <input
+                          id={`coins${day}`}
+                          name={`coins${day}`}
+                          type="number"
+                          min="0"
+                          max={DAILY_BONUS_MAX_COINS}
+                          required
+                          value={fieldValue("coins", day)}
+                          class={inputClass(Boolean(coinsError))}
+                          aria-invalid={coinsError ? "true" : undefined}
+                          aria-describedby={
+                            coinsError ? `coins${day}-error` : undefined
+                          }
+                        />
+                        {coinsError && (
+                          <p
+                            id={`coins${day}-error`}
+                            class="mt-1 text-xs text-danger"
+                          >
+                            {coinsError}
+                          </p>
+                        )}
+                      </td>
+                      <td class={tableCell}>
+                        <label for={`extra${day}`} class="sr-only">
+                          Day {day} item or egg
+                        </label>
+                        <select
+                          id={`extra${day}`}
+                          name={`extra${day}`}
+                          class={inputClass(Boolean(extraError))}
+                          aria-invalid={extraError ? "true" : undefined}
+                          aria-describedby={
+                            extraError ? `extra${day}-error` : undefined
+                          }
+                        >
+                          <option value="">coins only</option>
+                          <optgroup label="Mystery eggs">
+                            {CRATES.map((crate) => (
+                              <option
+                                value={`egg:${crate.id}`}
+                                selected={extra === `egg:${crate.id}`}
+                              >
+                                {crate.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {itemGroups.map(
+                            (group) =>
+                              group.items.length > 0 && (
+                                <optgroup label={group.label}>
+                                  {group.items.map((item) => (
+                                    <option
+                                      value={`item:${item.id}`}
+                                      selected={extra === `item:${item.id}`}
+                                    >
+                                      {item.name}
+                                      {!item.available && " (retired)"}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ),
+                          )}
+                        </select>
+                        {extraError && (
+                          <p
+                            id={`extra${day}-error`}
+                            class="mt-1 text-xs text-danger"
+                          >
+                            {extraError}
+                          </p>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div class="flex flex-wrap items-center gap-3 p-4">
+            <button type="submit" name="intent" value="save" class={btnPrimary}>
+              save schedule
+            </button>
+            {schedule.customised && (
+              <button
+                type="submit"
+                name="intent"
+                value="reset"
+                class={btnGhost}
+                formnovalidate
+              >
+                reset to default
+              </button>
+            )}
+          </div>
+        </form>
+      </TerminalWindow>
+    ) : (
+      <Notice tone="error" class="mt-6">
+        {season
+          ? `${season.name} is closed, so its daily bonus can't change.`
+          : "There's no current season yet. Start one in weeks first."}
+      </Notice>
+    )
+  }
+</AdminLayout>

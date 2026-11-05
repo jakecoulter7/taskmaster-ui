@@ -2,8 +2,10 @@ import { defineMiddleware, sequence } from "astro:middleware";
 import {
   buildCompetition,
   buildSeasonDirectory,
+  competitionCacheGeneration,
   invalidateCompetitionCache,
   loadCompetitionRows,
+  loadSeasonRows,
   type CompetitionRows,
   type CompetitionViewer,
 } from "./data/competition";
@@ -25,6 +27,7 @@ import {
   PASSWORD_PATH,
 } from "./lib/routes";
 import { withSecurityHeaders } from "./lib/security-headers";
+import { cachedPage } from "./lib/edge-cache";
 import { legacyAdminPath } from "./lib/admin-nav";
 import { adminSeasonOf, CLOSED_PARAM } from "./lib/admin-season";
 import { withBase, withoutBase } from "./lib/url";
@@ -48,6 +51,11 @@ const NO_SEASON: Season = {
   weekCount: 0,
 };
 
+// How long a signed-out visitor's page is shared. Writes drop it at once (in
+// this data centre, via the cache generation); the TTL bounds how late
+// time-driven changes (a week going live, a countdown ending) show up.
+const PAGE_CACHE_TTL_SECONDS = 60;
+
 const securityHeaders = defineMiddleware(async (context, next) =>
   withSecurityHeaders(await next(), context.url),
 );
@@ -65,7 +73,9 @@ const app = defineMiddleware(async (context, next) => {
   // admin routes (only reached by admins, see below) see real task content
   // read straight from the database; everywhere else password-protected
   // tasks are redacted unless the visitor unlocked them, and the raw rows
-  // come from the per-data-centre cache (see `data/competition.ts`).
+  // come from the per-data-centre cache (see `data/competition.ts`). Those
+  // rows cover every season that isn't closed; a closed season's rows are
+  // only loaded when something asks for its snapshot.
   let rows: Promise<CompetitionRows> | undefined;
   let directory: Promise<SeasonDirectory> | undefined;
   let hallOfFame: Promise<HallOfFame> | undefined;
@@ -92,6 +102,9 @@ const app = defineMiddleware(async (context, next) => {
     let queries = queriesBySeason.get(season.id);
     if (!queries) {
       queries = loadRows()
+        .then((live) =>
+          loadSeasonRows(live, season, viewer, context.url.origin),
+        )
         .then((all) => buildCompetition(all, viewer, season))
         .then(createQueries);
       queriesBySeason.set(season.id, queries);
@@ -185,7 +198,6 @@ const app = defineMiddleware(async (context, next) => {
     }
     context.locals.player = linked;
   } else if (!matches(isAuthPagePath)) {
-    const response = await next();
     // Public pages show the signed-in user in the navbar, so a signed-in
     // copy must never be stored and replayed (e.g. after logging out). The
     // same goes for pages rendered with a visitor's task-reveal cookies.
@@ -193,9 +205,19 @@ const app = defineMiddleware(async (context, next) => {
       hasSessionCookie(context.request) ||
       (viewer.mode === "public" && viewer.revealTokens.size > 0)
     ) {
+      const response = await next();
       response.headers.set("Cache-Control", "private, no-store");
+      return response;
     }
-    return response;
+    if (context.request.method !== "GET") return next();
+    // Everyone else gets the same HTML, so it's rendered once and shared from
+    // the data centre's cache: a Worker has little CPU time to spare.
+    const generation = await competitionCacheGeneration(context.url.origin);
+    return cachedPage(
+      `${context.url.origin}/__cache/page/${generation}${context.url.pathname}${context.url.search}`,
+      PAGE_CACHE_TTL_SECONDS,
+      next,
+    );
   }
 
   const response = await next();

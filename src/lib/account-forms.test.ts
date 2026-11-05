@@ -6,6 +6,7 @@ import {
   parseBallot,
   parsePasswordForm,
   parseProfileForm,
+  parseWalletAction,
   VOTE_OUTCOMES,
   type VoteOutcome,
 } from "./account-forms";
@@ -27,42 +28,30 @@ function errorsOf<T>(result: ParseResult<T>) {
 }
 
 describe("parseProfileForm", () => {
-  it("parses a bio and avatar", () => {
-    expect(
-      parseProfileForm(
-        formData({ bio: " Likes engines. ", avatarUrl: "/avatars/ada.png" }),
-      ),
-    ).toEqual({
+  it("parses a bio", () => {
+    expect(parseProfileForm(formData({ bio: " Likes engines. " }))).toEqual({
       ok: true,
-      data: { bio: "Likes engines.", avatarUrl: "/avatars/ada.png" },
-      values: { bio: " Likes engines. ", avatarUrl: "/avatars/ada.png" },
+      data: { bio: "Likes engines." },
+      values: { bio: " Likes engines. " },
     });
   });
 
-  it("clears blank fields", () => {
+  it("clears a blank bio", () => {
     const result = parseProfileForm(formData());
-    expect(result.ok && result.data).toEqual({ bio: null, avatarUrl: null });
+    expect(result.ok && result.data).toEqual({ bio: null });
   });
 
-  it("ignores fields players can't change", () => {
-    const result = parseProfileForm(formData({ name: "Mallory", id: "x" }));
-    expect(result.ok && result.data).toEqual({ bio: null, avatarUrl: null });
+  it("ignores fields players can't change, avatar included", () => {
+    const result = parseProfileForm(
+      formData({ name: "Mallory", id: "x", avatarUrl: "/avatars/ada.png" }),
+    );
+    expect(result.ok && result.data).toEqual({ bio: null });
   });
 
-  it("rejects a long bio and a bad avatar", () => {
+  it("rejects a long bio", () => {
     expect(
-      errorsOf(
-        parseProfileForm(
-          formData({
-            bio: "b".repeat(501),
-            avatarUrl: "http://example.com/a.png",
-          }),
-        ),
-      ),
-    ).toEqual({
-      bio: "Keep it under 500 characters.",
-      avatarUrl: "Use an https:// URL or a site path starting with /.",
-    });
+      errorsOf(parseProfileForm(formData({ bio: "b".repeat(501) }))),
+    ).toEqual({ bio: "Keep it under 500 characters." });
   });
 });
 
@@ -285,5 +274,118 @@ describe("describeVoteOutcome", () => {
     for (const outcome of VOTE_OUTCOMES) {
       expect(describeVoteOutcome(outcome, poll).message).not.toBe("");
     }
+  });
+});
+
+describe("parseWalletAction", () => {
+  const parse = (fields: Record<string, string>) =>
+    parseWalletAction(formData(fields));
+
+  it("parses a wish on one line, up to 200 characters", () => {
+    expect(parse({ intent: "wish", wish: "  An extra\n day  " })).toEqual({
+      intent: "wish",
+      wish: "An extra day",
+    });
+    expect(parse({ intent: "wish", wish: "   " })).toBeUndefined();
+    expect(parse({ intent: "wish", wish: "x".repeat(201) })).toBeUndefined();
+  });
+
+  it("parses equip and unequip", () => {
+    expect(parse({ intent: "equip", itemId: "duck" })).toEqual({
+      intent: "equip",
+      itemId: "duck",
+    });
+    expect(parse({ intent: "unequip", slot: "pet" })).toEqual({
+      intent: "unequip",
+      slot: "pet",
+    });
+    expect(parse({ intent: "unequip", slot: "hat" })).toBeUndefined();
+  });
+
+  it("needs a target for Sabotage and none for anything else", () => {
+    const use = { intent: "use", taskId: "w2" };
+    expect(
+      parse({ ...use, effect: "sabotage", targetPlayerId: "bob" }),
+    ).toEqual({
+      intent: "use",
+      effect: "sabotage",
+      copiedEffect: null,
+      taskId: "w2",
+      targetPlayerId: "bob",
+    });
+    expect(parse({ ...use, effect: "sabotage" })).toBeUndefined();
+    expect(
+      parse({ ...use, effect: "hint", targetPlayerId: "bob" }),
+    ).toBeUndefined();
+    expect(parse({ ...use, effect: "hint" })).toMatchObject({
+      effect: "hint",
+      targetPlayerId: null,
+    });
+    for (const effect of ["heist", "freeze", "spyglass"]) {
+      expect(parse({ ...use, effect })).toBeUndefined();
+      expect(parse({ ...use, effect, targetPlayerId: "bob" })).toMatchObject({
+        effect,
+        targetPlayerId: "bob",
+      });
+    }
+    expect(parse({ ...use, effect: "coin_rush" })).toMatchObject({
+      effect: "coin_rush",
+      targetPlayerId: null,
+    });
+  });
+
+  it("needs a copy for Copycat, and a target when it copies a targeted one", () => {
+    const use = { intent: "use", taskId: "w2", effect: "copycat" };
+    expect(parse(use)).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "copycat" })).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "shield" })).toBeUndefined();
+    expect(parse({ ...use, copiedEffect: "golden_week" })).toMatchObject({
+      effect: "copycat",
+      copiedEffect: "golden_week",
+      targetPlayerId: null,
+    });
+    expect(parse({ ...use, copiedEffect: "heist" })).toBeUndefined();
+    expect(
+      parse({ ...use, copiedEffect: "heist", targetPlayerId: "bob" }),
+    ).toMatchObject({ copiedEffect: "heist", targetPlayerId: "bob" });
+    expect(
+      parse({
+        intent: "use",
+        taskId: "w2",
+        effect: "hint",
+        copiedEffect: "hint",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects unknown intents and effects", () => {
+    expect(parse({ intent: "steal" })).toBeUndefined();
+    expect(
+      parse({ intent: "use", taskId: "w2", effect: "nuke" }),
+    ).toBeUndefined();
+  });
+
+  it("never uses a passive power-up", () => {
+    for (const effect of ["shield", "mirror", "insurance"]) {
+      expect(parse({ intent: "use", taskId: "w2", effect })).toBeUndefined();
+    }
+  });
+
+  it("parses a gift within the weekly cap, with an optional note", () => {
+    const gift = { intent: "gift", toPlayerId: "bob" };
+    expect(parse({ ...gift, amount: "3", message: "  nice   work " })).toEqual({
+      intent: "gift",
+      toPlayerId: "bob",
+      amount: 3,
+      message: "nice work",
+    });
+    expect(parse({ ...gift, amount: "1" })).toMatchObject({ message: null });
+    for (const amount of ["0", "6", "-1", "1.5", "two", ""]) {
+      expect(parse({ ...gift, amount })).toBeUndefined();
+    }
+    expect(
+      parse({ ...gift, amount: "1", message: "x".repeat(81) }),
+    ).toBeUndefined();
+    expect(parse({ intent: "gift", amount: "1" })).toBeUndefined();
   });
 });

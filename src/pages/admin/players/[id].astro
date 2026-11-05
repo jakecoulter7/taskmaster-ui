@@ -10,14 +10,27 @@ import {
   btnDanger,
   btnGhost,
   btnPrimary,
+  inputClass,
+  labelClass,
 } from "../../../components/admin/styles";
 import {
+  addCoinAdjustment,
+  deleteCoinAdjustment,
   deletePlayer,
   describeWriteError,
   getPlayer,
   getPlayerDeleteImpact,
+  giftEgg,
+  giftItem,
+  listCoinAdjustments,
+  revokeEggGift,
+  revokeItemGift,
   updatePlayer,
 } from "../../../data/admin";
+import CoinAmount from "../../../components/CoinAmount.astro";
+import SkillSigil from "../../../components/SkillSigil.astro";
+import { SKILL_ACCENT_CLASS } from "../../../lib/skill-ui";
+import { ukDateFormat } from "../../../lib/time";
 import {
   accountStatus,
   getPlayerAccount,
@@ -26,16 +39,24 @@ import {
 } from "../../../data/accounts";
 import { resetUserPassword, temporaryPassword } from "../../../lib/auth";
 import {
+  parseCoinAdjustmentForm,
+  parseEggGiftForm,
+  parseItemGiftForm,
   parsePlayerEmailForm,
   parsePlayerForm,
+  parseRowId,
   type FieldErrors,
   type FormValues,
 } from "../../../lib/admin-forms";
 import { withBase } from "../../../lib/url";
+import { CATEGORY_INFO, POWER_UP_INFO } from "../../../data/coins";
+import { CRATES } from "../../../data/coin-rules";
+import type { ShopItem } from "../../../types";
 import { withSeason } from "../../../lib/admin-season";
 
 // Fail closed if the middleware guard is ever bypassed.
-if (!Astro.locals.admin) return Astro.redirect(withBase("/login"));
+const admin = Astro.locals.admin;
+if (!admin) return Astro.redirect(withBase("/login"));
 
 const id = Astro.params.id!;
 const player = await getPlayer(id);
@@ -59,6 +80,17 @@ let accountEmail = account?.email ?? "";
 let accountError: string | undefined;
 // Shown once, in this response only: never put it in a redirect URL.
 let resetPassword: { password: string; signedOut: boolean } | undefined;
+let coinValues: FormValues = {};
+let coinErrors: FieldErrors = {};
+const coinsDone = (done: string) =>
+  Astro.redirect(withBase(`/admin/players/${id}?done=${done}#coins`));
+let itemValues: FormValues = {};
+let itemErrors: FieldErrors = {};
+let itemError: string | undefined;
+const itemsDone = (done: string) =>
+  Astro.redirect(withBase(`/admin/players/${id}?done=${done}#items`));
+let eggValues: FormValues = {};
+let eggErrors: FieldErrors = {};
 
 if (Astro.request.method === "POST") {
   const form = await Astro.request.formData();
@@ -68,7 +100,63 @@ if (Astro.request.method === "POST") {
     const query = new URLSearchParams({ done: "deleted", name: player.name });
     return Astro.redirect(rosterHref(`?${query}`));
   }
-  if (intent === "reset-password") {
+  if (intent === "coins-grant") {
+    const parsed = parseCoinAdjustmentForm(form);
+    coinValues = parsed.values;
+    if (!parsed.ok) {
+      coinErrors = parsed.errors;
+    } else {
+      await addCoinAdjustment(id, parsed.data, admin);
+      return coinsDone("coins");
+    }
+  } else if (intent === "coins-delete") {
+    const rowId = parseRowId(form);
+    if (rowId !== undefined) await deleteCoinAdjustment(id, rowId);
+    return coinsDone("coins-deleted");
+  } else if (intent === "item-gift") {
+    const parsed = parseItemGiftForm(form);
+    itemValues = parsed.values;
+    if (!parsed.ok) {
+      itemErrors = parsed.errors;
+    } else if (await giftItem(id, parsed.data, admin)) {
+      return itemsDone("item-gifted");
+    } else {
+      itemErrors = {
+        itemId:
+          "They already own that item (or have had that power-up this season), or it no longer exists.",
+      };
+    }
+  } else if (intent === "item-revoke") {
+    const rowId = parseRowId(form);
+    const { getItemGifts } = await Astro.locals.getQueries(player.seasonId);
+    const gift = getItemGifts(id).find((g) => g.gift.id === rowId);
+    if (rowId === undefined || !gift) return itemsDone("item-revoked");
+    // A spent passive charge (a Shield, Mirror or Insurance that's already
+    // paid out) has no stored use to protect it, so check the snapshot too.
+    if (gift.spent || !(await revokeItemGift(id, rowId))) {
+      itemError = `${gift.item.name} has already been used or sold on the marketplace, so it can't be taken back. Revoke a use in that week's judge tab first.`;
+    } else {
+      return itemsDone("item-revoked");
+    }
+  } else if (intent === "egg-gift") {
+    const parsed = parseEggGiftForm(form);
+    eggValues = parsed.values;
+    if (!parsed.ok) {
+      eggErrors = parsed.errors;
+    } else if (await giftEgg(id, parsed.data, admin)) {
+      return itemsDone("egg-gifted");
+    } else {
+      eggErrors = { crateId: "That player no longer exists." };
+    }
+  } else if (intent === "egg-revoke") {
+    const rowId = parseRowId(form);
+    if (rowId !== undefined && !(await revokeEggGift(id, rowId))) {
+      itemError =
+        "That egg has already been cracked, so what it hatched is theirs to keep.";
+    } else {
+      return itemsDone("egg-revoked");
+    }
+  } else if (intent === "reset-password") {
     if (!account?.userId) {
       accountError = "This player has no sign-in account to reset yet.";
     } else {
@@ -130,7 +218,49 @@ if (Astro.request.method === "POST") {
   }
 }
 
-const impact = await getPlayerDeleteImpact(id);
+const [
+  impact,
+  adjustments,
+  {
+    features,
+    getWallet,
+    getInventory,
+    getGiftableItems,
+    getItemGifts,
+    getEggGifts,
+    getSkillLog,
+  },
+] = await Promise.all([
+  getPlayerDeleteImpact(id),
+  listCoinAdjustments(id),
+  Astro.locals.getQueries(player.seasonId),
+]);
+const wallet = getWallet(id);
+const inventory = getInventory(id);
+const giftable = getGiftableItems(id);
+const itemGifts = getItemGifts(id);
+const eggGifts = getEggGifts(id);
+const unopenedEggs = eggGifts.filter((egg) => !egg.hatched).length;
+const skillLog = getSkillLog(id);
+const skillDateFmt = ukDateFormat({ day: "numeric", month: "short" });
+/** Extra context for an item in the gift picker. */
+const itemTags = (item: ShopItem) =>
+  [
+    item.powerUp && POWER_UP_INFO[item.powerUp].passive ? "passive" : "",
+    !item.available ? "retired" : "",
+    item.crateOnly ? "egg exclusive" : "",
+    item.skillOnly ? "skill reward" : "",
+  ].filter(Boolean);
+const itemNotice = {
+  "item-gifted": "Item gifted. The player has been notified.",
+  "item-revoked": "Gifted item taken back.",
+  "egg-gifted": "Egg gifted. The player has been notified.",
+  "egg-revoked": "Gifted egg taken back.",
+}[Astro.url.searchParams.get("done") ?? ""];
+const coinNotice = {
+  coins: "Clim Coin adjustment saved.",
+  "coins-deleted": "Clim Coin adjustment removed.",
+}[Astro.url.searchParams.get("done") ?? ""];
 const status = accountStatus(account);
 const linked = Boolean(account?.userId);
 const accountSaved = Astro.url.searchParams.get("done") === "account";
@@ -148,12 +278,23 @@ const statusHelp: Record<typeof status, string> = {
 <AdminLayout title={`Edit ${player.name}`}>
   <div class="flex flex-wrap items-center justify-between gap-3">
     <a href={rosterHref()} class={btnGhost}>&larr; ROSTER</a>
-    <a
-      href={withBase(`/players/${player.id}`)}
-      class="text-xs text-cyan hover:underline"
-      target="_blank"
-      rel="noopener">view public profile ↗</a
-    >
+    <div class="flex flex-wrap items-center gap-4">
+      <a
+        href={withBase(
+          withSeason(
+            `/admin/activity?${new URLSearchParams({ who: player.id })}`,
+            season,
+          ),
+        )}
+        class="text-xs text-cyan hover:underline">activity log →</a
+      >
+      <a
+        href={withBase(`/players/${player.id}`)}
+        class="text-xs text-cyan hover:underline"
+        target="_blank"
+        rel="noopener">view public profile ↗</a
+      >
+    </div>
   </div>
   <h1 class="mt-6 text-2xl font-extrabold tracking-tight text-ink">
     <span class="text-acid">$</span> vim ~/players/{player.id}.md
@@ -274,6 +415,411 @@ const statusHelp: Record<typeof status, string> = {
           <Notice tone="error" class="mt-5">
             {accountError}
           </Notice>
+        )
+      }
+    </TerminalWindow>
+  </section>
+  <section id="coins" aria-labelledby="coins-heading" class="mt-8">
+    <h2
+      id="coins-heading"
+      class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      clim coin
+    </h2>
+    <TerminalWindow title={`~/players/${player.id}/wallet`}>
+      {
+        coinNotice && (
+          <Notice tone="success" class="mb-5">
+            {coinNotice}
+          </Notice>
+        )
+      }
+      <div class="flex flex-wrap items-baseline gap-x-6 gap-y-2">
+        <CoinAmount
+          amount={wallet.balance}
+          class:list={[
+            "text-3xl",
+            wallet.balance < 0 ? "text-danger" : "text-amber",
+          ]}
+        />
+        <p class="text-xs text-ink-faint">
+          earned {wallet.earned} · grants {wallet.adjusted} · spent {
+            wallet.spent
+          }
+        </p>
+      </div>
+      <p class="mt-2 text-xs text-ink-faint">
+        Earnings are worked out from results and activity (held results count
+        here, but not in the player's own wallet until they're published).
+      </p>
+      <form
+        method="post"
+        class="mt-5 grid gap-4 sm:grid-cols-[8rem_1fr_auto] sm:items-start"
+        novalidate
+      >
+        <input type="hidden" name="intent" value="coins-grant" />
+        <AdminField
+          label="amount"
+          name="amount"
+          type="number"
+          value={coinValues.amount}
+          error={coinErrors.amount}
+          required
+          hint="Negative deducts."
+        />
+        <AdminField
+          label="reason"
+          name="reason"
+          value={coinValues.reason}
+          error={coinErrors.reason}
+          required
+          hint="Shown in the player's wallet."
+        />
+        <button type="submit" class:list={[btnPrimary, "sm:mt-6"]}>
+          grant / deduct
+        </button>
+      </form>
+      {
+        adjustments.length > 0 && (
+          <ul class="mt-5 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+            {adjustments.map((row) => (
+              <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                <span class="min-w-0 text-ink-dim">
+                  {row.reason}
+                  <span class="block text-[11px] text-ink-faint">
+                    by {row.actorName}
+                  </span>
+                </span>
+                <span class="flex items-center gap-3">
+                  <CoinAmount
+                    amount={row.amount}
+                    signed
+                    class:list={[row.amount < 0 ? "text-danger" : "text-amber"]}
+                  />
+                  <ConfirmDelete
+                    subject={`the ${row.amount > 0 ? "grant" : "deduction"} "${row.reason}"`}
+                    intent="coins-delete"
+                    fields={{ rowId: row.id }}
+                    label="remove"
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      }
+    </TerminalWindow>
+  </section>
+  <section
+    id="skills"
+    aria-labelledby="skills-heading"
+    class="mt-8 scroll-mt-24"
+  >
+    <h2
+      id="skills-heading"
+      class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      skill tree
+    </h2>
+    <TerminalWindow title={`~/players/${player.id}/skills`}>
+      {
+        skillLog.path ? (
+          <>
+            <p
+              class:list={[
+                "inline-flex items-center gap-2 text-sm font-bold",
+                SKILL_ACCENT_CLASS[skillLog.path.accent].text,
+              ]}
+            >
+              <SkillSigil pathId={skillLog.path.id} class="h-4 w-4" />
+              {skillLog.path.name}
+              <span class="font-normal text-ink-faint">
+                · {skillLog.unlocks.length}/{skillLog.path.nodes.length} skills
+              </span>
+            </p>
+            <ul class="mt-4 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+              {skillLog.unlocks.map((u) => (
+                <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                  <span class="min-w-0 text-ink-dim">
+                    {u.node.name}
+                    <span class="block text-[11px] text-ink-faint">
+                      tier {u.node.tier} · {skillDateFmt.format(new Date(u.at))}
+                    </span>
+                  </span>
+                  <CoinAmount amount={-u.price} class="text-danger" />
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p class="text-sm text-ink-dim">
+            No pathway yet. Players pick one themselves on /skills.
+          </p>
+        )
+      }
+      <p class="mt-3 text-xs text-ink-faint">
+        Pathways are final for the season. Rewards they unlocked show in the
+        inventory below.
+      </p>
+    </TerminalWindow>
+  </section>
+  <section id="items" aria-labelledby="items-heading" class="mt-8 scroll-mt-24">
+    <h2
+      id="items-heading"
+      class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      gift items, eggs &amp; power-ups
+    </h2>
+    <TerminalWindow title={`~/players/${player.id}/inventory`}>
+      {
+        itemNotice && !itemError && (
+          <Notice tone="success" class="mb-5">
+            {itemNotice}
+          </Notice>
+        )
+      }
+      {
+        itemError && (
+          <Notice tone="error" class="mb-5">
+            {itemError}
+          </Notice>
+        )
+      }
+      <p class="text-xs text-ink-faint">
+        <span class="text-acid" aria-hidden="true">$</span> ls ./inventory
+      </p>
+      {
+        inventory.length === 0 && unopenedEggs === 0 ? (
+          <p class="mt-2 text-sm text-ink-dim">
+            {player.name} doesn't own anything yet.
+          </p>
+        ) : (
+          <ul class="mt-2 flex flex-wrap gap-2 text-xs">
+            {inventory.map(({ item, equipped, charges }) => (
+              <li class="rounded-md border border-grid bg-term-bg px-2 py-1 text-ink-dim">
+                <span class="text-ink">{item.name}</span>{" "}
+                <span class="text-ink-faint">
+                  · {CATEGORY_INFO[item.category].label.toLowerCase()}
+                  {equipped && " · worn"}
+                  {charges > 0 && ` · ${charges} unused`}
+                </span>
+              </li>
+            ))}
+            {eggGifts
+              .filter((egg) => !egg.hatched)
+              .map(({ crate }) => (
+                <li class="rounded-md border border-amber/40 bg-term-bg px-2 py-1 text-ink-dim">
+                  <span class="text-ink">{crate.name}</span>{" "}
+                  <span class="text-ink-faint">· egg · unopened</span>
+                </li>
+              ))}
+          </ul>
+        )
+      }
+      {
+        giftable.length === 0 ? (
+          <p class="mt-5 text-sm text-ink-dim">
+            {player.name} already owns everything in the shop.
+          </p>
+        ) : (
+          <form
+            method="post"
+            class="mt-5 grid gap-4 sm:grid-cols-[minmax(0,16rem)_1fr_auto] sm:items-start"
+            novalidate
+          >
+            <input type="hidden" name="intent" value="item-gift" />
+            <div class="space-y-1.5">
+              <label for="field-itemId" class={labelClass}>
+                item
+                <span class="text-acid" aria-hidden="true">
+                  {" "}
+                  *
+                </span>
+              </label>
+              <select
+                id="field-itemId"
+                name="itemId"
+                required
+                aria-invalid={itemErrors.itemId ? "true" : undefined}
+                aria-describedby={
+                  itemErrors.itemId ? "field-itemId-error" : "field-itemId-hint"
+                }
+                class={inputClass(Boolean(itemErrors.itemId))}
+              >
+                <option value="" selected={!itemValues.itemId}>
+                  choose an item
+                </option>
+                {giftable.map((group) => (
+                  <optgroup label={group.label}>
+                    {group.items.map((item) => {
+                      const tags = itemTags(item);
+                      return (
+                        <option
+                          value={item.id}
+                          selected={itemValues.itemId === item.id}
+                        >
+                          {item.name} ({item.price}c
+                          {tags.length > 0 && `, ${tags.join(", ")}`})
+                        </option>
+                      );
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+              {itemErrors.itemId ? (
+                <p id="field-itemId-error" class="text-xs text-danger">
+                  {itemErrors.itemId}
+                </p>
+              ) : (
+                <p id="field-itemId-hint" class="text-xs text-ink-faint">
+                  Anything they don't own yet, retired and egg-exclusive items
+                  too. Free for them.
+                </p>
+              )}
+            </div>
+            <AdminField
+              label="reason"
+              name="giftReason"
+              value={itemValues.giftReason}
+              error={itemErrors.reason}
+              required
+              hint="Shown in the player's notification and wallet history."
+            />
+            <button type="submit" class:list={[btnPrimary, "sm:mt-6"]}>
+              gift item
+            </button>
+          </form>
+        )
+      }
+      {
+        itemGifts.length > 0 && (
+          <ul class="mt-5 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+            {itemGifts.map(({ gift, item, spent }) => (
+              <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                <span class="min-w-0 text-ink-dim">
+                  <span class="text-ink">{item.name}</span>
+                  <span class="text-ink-faint">
+                    {" "}
+                    · {CATEGORY_INFO[item.category].label.toLowerCase()}
+                  </span>
+                  <span class="block">{gift.reason}</span>
+                  <span class="block text-[11px] text-ink-faint">
+                    by {gift.actorName}
+                  </span>
+                </span>
+                {spent ? (
+                  <span class="text-[11px] font-bold uppercase tracking-widest text-ink-faint">
+                    used
+                  </span>
+                ) : (
+                  <ConfirmDelete
+                    subject={`the gifted ${item.name} from ${player.name}'s inventory`}
+                    intent="item-revoke"
+                    fields={{ rowId: gift.id }}
+                    label="take back"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        )
+      }
+      <form
+        method="post"
+        class="mt-8 grid gap-4 border-t border-grid/60 pt-6 sm:grid-cols-[minmax(0,16rem)_1fr_auto] sm:items-start"
+        novalidate
+      >
+        <input type="hidden" name="intent" value="egg-gift" />
+        <div class="space-y-1.5">
+          <label for="field-crateId" class={labelClass}>
+            egg
+            <span class="text-acid" aria-hidden="true">
+              {" "}
+              *
+            </span>
+          </label>
+          <select
+            id="field-crateId"
+            name="crateId"
+            required
+            aria-invalid={eggErrors.crateId ? "true" : undefined}
+            aria-describedby={eggErrors.crateId
+              ? "field-crateId-error"
+              : "field-crateId-hint"}
+            class={inputClass(Boolean(eggErrors.crateId))}
+          >
+            <option value="" selected={!eggValues.crateId}>
+              choose an egg
+            </option>
+            {
+              CRATES.map((crate) => (
+                <option
+                  value={crate.id}
+                  selected={eggValues.crateId === crate.id}
+                >
+                  {crate.name} ({crate.price}c{crate.exclusive && ", seasonal"})
+                </option>
+              ))
+            }
+          </select>
+          {
+            eggErrors.crateId ? (
+              <p id="field-crateId-error" class="text-xs text-danger">
+                {eggErrors.crateId}
+              </p>
+            ) : (
+              <p id="field-crateId-hint" class="text-xs text-ink-faint">
+                Lands unopened in their inventory for them to crack, free, with
+                their own odds.
+                {!features.shop_eggs &&
+                  " Mystery eggs are switched off, so it waits hidden until they're back on."}
+              </p>
+            )
+          }
+        </div>
+        <AdminField
+          label="reason"
+          name="eggReason"
+          value={eggValues.eggReason}
+          error={eggErrors.reason}
+          required
+          hint="Shown in the player's notification and wallet history."
+        />
+        <button type="submit" class:list={[btnPrimary, "sm:mt-6"]}>
+          gift egg
+        </button>
+      </form>
+      {
+        eggGifts.length > 0 && (
+          <ul class="mt-5 divide-y divide-grid/60 rounded-md border border-grid text-sm">
+            {eggGifts.map(({ gift, crate, hatched }) => (
+              <li class="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                <span class="min-w-0 text-ink-dim">
+                  <span class="text-ink">{crate.name}</span>
+                  <span class="text-ink-faint">
+                    {" "}
+                    · {hatched ? `hatched ${hatched.name}` : "unopened"}
+                  </span>
+                  <span class="block">{gift.reason}</span>
+                  <span class="block text-[11px] text-ink-faint">
+                    by {gift.actorName}
+                  </span>
+                </span>
+                {hatched ? (
+                  <span class="text-[11px] font-bold uppercase tracking-widest text-ink-faint">
+                    cracked
+                  </span>
+                ) : (
+                  <ConfirmDelete
+                    subject={`the gifted ${crate.name} from ${player.name}'s inventory`}
+                    intent="egg-revoke"
+                    fields={{ rowId: gift.id }}
+                    label="take back"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
         )
       }
     </TerminalWindow>

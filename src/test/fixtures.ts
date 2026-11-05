@@ -9,10 +9,12 @@ import type {
   teamScores,
 } from "../db/schema";
 import type {
+  ClimCoinData,
   CompetitionData,
   Player,
   Poll,
   Season,
+  ShopItem,
   Task,
   Team,
 } from "../types";
@@ -59,6 +61,7 @@ export function taskRow(overrides: Partial<TaskRow> = {}): TaskRow {
     resultsHeldAt: null,
     resultsRevealCount: 0,
     resultsPublishedAt: null,
+    hint: null,
     ...overrides,
   };
 }
@@ -213,6 +216,71 @@ export function competitionData(
     predictions: [],
     recaps: {},
     changelog: [],
+    coins: coinData(),
+    // Every flag off, as on a fresh site.
+    features: {
+      shop_eggs: false,
+      storm_mode: false,
+      skill_trees: false,
+      mini_tasks: false,
+      achievements: false,
+      marketplace: false,
+      bounties: false,
+      shop_deals: false,
+      shop_bundles: false,
+      shop_raffle: false,
+      shop_gift_wrap: false,
+      daily_bonus: false,
+      pool_bracket: false,
+    },
+    ...overrides,
+  };
+}
+
+export function coinData(overrides: Partial<ClimCoinData> = {}): ClimCoinData {
+  return {
+    items: [],
+    purchases: [],
+    uses: [],
+    equipped: [],
+    adjustments: [],
+    entries: [],
+    crateOpens: [],
+    gifts: [],
+    itemGifts: [],
+    eggGifts: [],
+    wishes: [],
+    hints: {},
+    skillPaths: [],
+    skillUnlocks: [],
+    miniTasks: [],
+    miniTaskCompletions: [],
+    dailyBonusRewards: [],
+    dailyBonusClaims: [],
+    market: { listings: [], offers: [], sales: [] },
+    bounties: { bounties: [], claims: [] },
+    raffle: { tickets: [], draws: [] },
+    renameTokens: [],
+    wrappedGifts: [],
+    bundles: [],
+    bundlePurchases: [],
+    dealOverrides: [],
+    ...overrides,
+  };
+}
+
+export function shopItem(overrides: Partial<ShopItem> = {}): ShopItem {
+  return {
+    id: "rubber-duck",
+    name: "Rubber Duck",
+    description: "Quacks at bugs.",
+    category: "pet",
+    price: 10,
+    imageUrl: "/shop/pets/rubber-duck.svg",
+    available: true,
+    crateOnly: false,
+    skillOnly: false,
+    sortOrder: 0,
     ...overrides,
   };
 }

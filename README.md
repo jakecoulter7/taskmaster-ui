@@ -32,7 +32,7 @@ on request on **Cloudflare Workers**.
 - [Neon Object Storage](https://neon.com/docs/storage/overview)
   (S3-compatible) for task submission photos, via
   [`aws4fetch`](https://github.com/mhart/aws4fetch)
-- Prettier (with `prettier-plugin-astro`)
+- [Biome](https://biomejs.dev) for linting (incl. a11y) and formatting
 
 ## 📁 Project structure
 
@@ -56,10 +56,16 @@ src/
 │   ├── client.ts      # createDb(url) — node-postgres client for scripts
 │   └── index.ts       # getDb() — Neon HTTP client used by the site
 ├── data/              # The data-access layer (the only code that imports db/)
-│   ├── competition.ts # loads every table in one batch (edge-cached rows), builds a season's snapshot
+│   ├── competition.ts # loads the open seasons' rows in one batch (edge-cached), closed seasons on demand; builds a season's snapshot
 │   ├── seasons.ts     # rows → Season (status derived), season lookups, rowsForSeason
 │   ├── season-close.ts # what still stops a season being closed
 │   ├── hall-of-fame-queries.ts # closed seasons' podiums, squads, awards + all-time records
+│   ├── streak-queries.ts # win / podium / scoring streaks, one-week climbs, comebacks
+│   ├── wrapped-queries.ts # the season wrapped + each player's wrapped (personas, highs, rivals)
+│   ├── mini-tasks.ts  # rows → MiniTask (status derived from UK dates) + completions
+│   ├── mini-task-queries.ts # what's running, a player's ticks and tally
+│   ├── achievement-queries.ts # the achievements catalogue and a player's progress
+│   ├── activity-queries.ts # the admin activity log (score history + coin records)
 │   ├── players.ts     # rows → Player ─┐
 │   ├── teams.ts       # rows → Team    ├─ pure mappers
 │   ├── tasks.ts       # rows → Task    │  (status derived from dates)
@@ -106,9 +112,9 @@ src/
 │   ├── live.astro             # /live — results night, revealed bottom first
 │   ├── rules.astro            # /rules — how to play, scoring, bonuses, the prize
 │   ├── compare/               # /compare head-to-head (+ /compare/[a]/[b])
-│   ├── stats.astro            # the current season's stats & awards
+│   ├── stats.astro            # the current season's stats, streaks, comebacks & awards
 │   ├── hall-of-fame.astro     # every closed season's champions + all-time records
-│   ├── seasons/               # /seasons/[id] — a season's final standings (/seasons → hall of fame)
+│   ├── seasons/               # /seasons/[id] — a season's final standings (/seasons → hall of fame), plus /seasons/[id]/wrapped and /seasons/[id]/wrapped/[player]
 │   └── 404.astro
 ├── styles/
 │   └── global.css     # design tokens (@theme) + terminal helper classes
@@ -132,16 +138,24 @@ db/schema.ts  →  data/*.ts          →   data/queries.ts   →   pages      �
   `getQueries(seasonId)` for another. Pages about one player, squad or week
   use `recordScope` (`src/lib/season-scope.ts`) to load that record's season.
   The rows are loaded lazily, at most once per request, and each season's
-  snapshot is built from them at most once.
+  snapshot is built from them at most once. A closed season's rows are only
+  loaded when something asks for its snapshot (see below).
 - All cross-record computation (leaderboard ranking, rank movement, awards,
   head-to-head) lives in `queries.ts` as pure functions.
 
 The database stores **facts only** (points, dates, membership). Finishing
 positions, task status and totals are always derived, so they can't drift.
-[`competition.ts`](src/data/competition.ts) loads every table in a single
-HTTP round trip (or from the edge cache, see below); the selectors are pure,
-synchronous functions over that snapshot, which keeps the components unaware
-of the database.
+[`competition.ts`](src/data/competition.ts) loads what every request needs in
+a single HTTP round trip (or from the edge cache, see below): the seasons, a
+light index of which season each player, squad and week is in, the
+site-wide tables (polls, changelog, shop, flags) and the season-specific rows
+of every season that **isn't closed**, narrowed in SQL
+(`seasonRowQueries`). A closed season's rows are loaded on demand, in one
+more round trip, only by pages about it (the hall of fame, its standings,
+its wrapped, its old players) via `loadSeasonRows`. So the per-request load
+stays the same size however many seasons are archived. The selectors are
+pure, synchronous functions over the snapshot, which keeps the components
+unaware of the database.
 
 ### ⚡ Caching
 
@@ -164,13 +178,39 @@ rows are cached at the edge rather than read on every page view:
   skip it (`isCompetitionNeutralRoute` in `src/lib/routes.ts`).
 - **Staleness:** other data centres, and edits made from scripts or the Neon
   console, show up within 5 minutes.
+- **Closed seasons** are cached separately, per season, for 24 hours
+  (`ARCHIVE_CACHE_TTL_SECONDS`), as they rarely change (a reopened season
+  loads with the open ones). The key includes when the season was closed and
+  an archive generation that every signed-in write purges along with the
+  live rows, so late writes (e.g. People's Choice votes after the season
+  closes) show straight away. Script edits to a closed season can take up
+  to a day.
 - **Admins** always read the database directly; `/admin` never uses the
   cache.
 - **`/live`** reads the show's state (holds, reveal counts and held scores)
   fresh on every poll with one small query, so results night stays in sync
   everywhere.
 
-The cache is a no-op on `*.workers.dev` URLs (Cloudflare's Cache API only
+**Signed-out pages** are cached too, as rendered HTML. The Worker runs on the
+Workers Free plan, whose 10 ms CPU limit per request a full render can exceed
+(`Worker exceeded CPU time limit`), so a signed-out visitor's page is
+rendered once per data centre and shared (`cachedPage` in
+`src/lib/edge-cache.ts`, wired up in `src/middleware.ts`):
+
+- Only `GET`s without a session or task-reveal cookie, and only plain HTML
+  `200`s that set no cookie and no `Cache-Control` of their own (so `/live`,
+  which sends `no-store`, never is). Signed-in pages are always rendered.
+- They're kept for 60 seconds (`PAGE_CACHE_TTL_SECONDS`), which bounds how
+  late time-driven changes (a week going live) reach signed-out visitors.
+- The key includes a cache generation (`competitionCacheGeneration`) that is
+  purged with the rows, so a write empties the page cache in that data
+  centre too, and that expires with them.
+
+The timezone helpers in `src/lib/time.ts` also memoise their `Intl` work
+(per 15-minute offset slot, and per formatter), as those conversions were
+the biggest share of the data layer's CPU time.
+
+The caches are a no-op on `*.workers.dev` URLs (Cloudflare's Cache API only
 works on custom domains), where every request reads the database.
 
 ## 🗄️ Database (Neon)
@@ -235,11 +275,29 @@ they're public URLs: blank week ids in later seasons default to
   writes to its weeks, roster and scores until it's reopened.
 - **Public archive:** `/hall-of-fame` lists every closed season's champion,
   podium, winning squad and awards, plus all-time records (highest season
-  total, biggest winning margin, most weekly wins, best single week).
+  total, biggest winning margin, most weekly wins, best single week, longest
+  win streak and podium run, biggest one-week climb, greatest comeback).
   `/seasons/<id>` shows a season's standings, squads, awards and weeks.
   Player, squad, task and recap URLs from past seasons keep working, with an
   "archived season" banner. Seasons being prepared (not current, not closed)
   are hidden from the public.
+- **Wrapped:** closing a season also publishes its wrapped.
+  `/seasons/<id>/wrapped` reviews the whole season: the numbers, the
+  champion, the title race (weeks at #1, lead changes, wire-to-wire), streaks,
+  comebacks and awards. `/seasons/<id>/wrapped/<player>` gives every player
+  their own: a playful persona, final rank, best and toughest weeks, streaks,
+  awards won, the rivals either side of them, and their points chart. Until
+  the season is closed both 404 for the public (`isWrappedLive`), and admins
+  see a preview (linked from the season page). It's all derived from the
+  standings, so nothing extra is stored.
+- **Streaks & comebacks** (`streak-queries.ts`) are counted over a season's
+  scored weeks: a week a player wasn't scored on breaks a streak. Win, podium
+  (top 3) and scoring (points > 0) streaks need two weeks in a row to count. A
+  climb is the most places gained over one week's results, and a comeback runs
+  from a player's lowest rank after any week to their rank now. They feed the
+  `/stats` page, player profiles, the wrapped and the Hall of Fame records.
+  Streaks that include the latest week of a running season are flagged
+  "still going".
 - Polls and the changelog are site-wide. A poll's voting bonus only counts
   for players in the season of the week it lands in.
 - Player sign-in emails are unique across all seasons, so a returning player
@@ -248,19 +306,20 @@ they're public URLs: blank week ids in later seasons default to
 
 ## 🔐 Admin
 
-`/admin` is grouped into five areas, and `/admin/guide` explains each one
+`/admin` is grouped into six areas, and `/admin/guide` explains each one
 along with the weekly runbook:
 
-| Area      | Path             | What it's for                                                                                                                                                                                                                                                                                                                                                                   |
-| --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| dashboard | `/admin`         | What needs doing now: the live week, finished weeks still to judge or publish, and the next week to be released, each with a button for its next step. Prompts to close a finished season or launch the next one.                                                                                                                                                               |
-| seasons   | `/admin/seasons` | Part of the weeks area. Create seasons, make one current, close one to crown its champion (or reopen it), rename, and delete empty ones. Editor at `/admin/seasons/<id>`.                                                                                                                                                                                                       |
-| weeks     | `/admin/weeks`   | One row per task with its progress. Each week is a workspace with four tabs: **brief** (`/admin/weeks/<id>`: the task form, reveal password, delete), **judge** (`…/judge`: entries gallery with a points box per player or squad, or a plain grid when the task takes no entries, plus bonuses and the score history), **results night** (`…/live`) and **recap** (`…/recap`). |
-| roster    | `/admin/roster`  | Players (with sign-in accounts) and squads, per season; editors at `/admin/players/<id>` and `/admin/teams/<id>`.                                                                                                                                                                                                                                                               |
-| site      | `/admin/site`    | [Polls](#️-polls) and the homepage changelog; editors at `/admin/polls/<id>` and `/admin/changelog/<id>`.                                                                                                                                                                                                                                                                        |
-| guide     | `/admin/guide`   | How to use the admin.                                                                                                                                                                                                                                                                                                                                                           |
+| Area      | Path              | What it's for                                                                                                                                                                                                                                                                                                                                                                   |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dashboard | `/admin`          | What needs doing now: the live week, finished weeks still to judge or publish, and the next week to be released, each with a button for its next step. Prompts to close a finished season or launch the next one.                                                                                                                                                               |
+| seasons   | `/admin/seasons`  | Part of the weeks area. Create seasons, make one current, close one to crown its champion (or reopen it), rename, and delete empty ones. Editor at `/admin/seasons/<id>`.                                                                                                                                                                                                       |
+| weeks     | `/admin/weeks`    | One row per task with its progress. Each week is a workspace with four tabs: **brief** (`/admin/weeks/<id>`: the task form, reveal password, delete), **judge** (`…/judge`: entries gallery with a points box per player or squad, or a plain grid when the task takes no entries, plus bonuses and the score history), **results night** (`…/live`) and **recap** (`…/recap`). |
+| roster    | `/admin/roster`   | Players (with sign-in accounts) and squads, per season; editors at `/admin/players/<id>` and `/admin/teams/<id>`.                                                                                                                                                                                                                                                               |
+| site      | `/admin/site`     | Feature flags, [polls](#️-polls), [mini-tasks](#-mini-tasks--achievements), the homepage changelog and the shop (items, [bundles and the deal of the week](#️-shop-extras)); editors at `/admin/polls/<id>`, `/admin/mini-tasks/<id>`, `/admin/changelog/<id>` and `/admin/shop/bundles/<id>`; marketplace and [bounty](#-bounties) moderation at `/admin/market`.              |
+| activity  | `/admin/activity` | One season's timeline of everything that moved points or Clim Coin (score changes, coin grants, gifts, purchases, crates, power-ups, skills, wishes, mini-tasks, marketplace sales, bounties, shop extras), filterable by kind and player, for disputes. The [economy report](#-economy-report) is at `/admin/economy`.                                                         |
+| guide     | `/admin/guide`    | How to use the admin.                                                                                                                                                                                                                                                                                                                                                           |
 
-The weeks and roster lists, and the new week / player / squad forms, work on
+The weeks and roster lists, the activity log, and the new week / player / squad forms, work on
 one season: the current one, or another picked with the season switcher
 (`?season=<id>`, see `src/lib/admin-season.ts`). Screens about a single week,
 player or squad use that record's season.
@@ -280,6 +339,13 @@ plain HTML posts, so they work without JavaScript.
   of that week's judge tab. Saving the grid only touches rows that
   changed, so each score keeps its `created_at` (when it was first recorded)
   and gets a fresh `updated_at` when edited.
+- **Activity log:** `/admin/activity` merges the season's `score_audit_log`
+  with its coin records (`coin_adjustments`, `item_gifts`,
+  `mini_task_completions`, purchases, crates, gifts, power-up uses, skill
+  unlocks and wishes) into one newest-first timeline
+  (`src/data/activity-queries.ts`), filterable by kind (`?kind=`) and by the
+  player or squad affected (`?who=`). Rows deleted outright (a removed coin
+  grant, a revoked power-up) leave no entry.
 
 - The admin panel is part of the site: admin pages keep the normal navbar,
   footer and command palette, with an admin sub-nav underneath (areas and
@@ -375,15 +441,21 @@ default) and which **kinds**:
 - **Text:** up to 5000 characters.
 
 On **team tasks** entries belong to the squad: any member can submit or
-withdraw them, and the limit is per squad. Players can withdraw an entry
-(freeing the slot) until the deadline, but not edit it. The entry form is a
-plain `POST` to `/account/submissions/<task>`, so it needs a signed-in player
-and works without JavaScript. The entry count and the insert are one
-statement, so double-submits can't go over the limit.
+withdraw them, and the limit is per squad. Until the deadline players can
+withdraw an entry (freeing the slot) or edit a text entry or photo caption
+(the photo itself can't be swapped; withdraw it and upload another). The
+entry form is a plain `POST` to `/account/submissions/<task>`, so it needs a
+signed-in player and works without JavaScript. With JS, photo uploads show a
+progress bar: the script posts with an `x-upload-progress` header and the
+endpoint answers with JSON naming the page to go back to, instead of a
+redirect. The entry count and the insert are one statement, so double-submits
+can't go over the limit.
 
 Until the deadline only the player (or squad) and admins can see an entry.
 Afterwards every entry shows in a gallery on the task page, unless an admin
-hid it. Photos are served through `/submissions/<id>/media`, which checks
+hid it. Clicking a photo opens a full-size viewer (arrow keys or swipe
+between entries, Esc to close); without JS it opens the image. Photos are
+served through `/submissions/<id>/media`, which checks
 access and redirects to a short-lived presigned URL, so the bucket stays
 private.
 
@@ -442,6 +514,374 @@ count shows), then everyone's picks are revealed. A correct call (a shared
 first place counts) earns +1 bonus point once the results are published,
 derived from the results so a corrected score can't leave a stale bonus.
 
+## 🪙 Clim Coin
+
+A per-season currency. Players earn **Clim Coin** and spend it in the
+[`/shop`](src/pages/shop.astro) on pets, avatars, cosmetics (titles, name
+colours, profile themes, shell prompts and avatar frames), power-ups and
+[shop extras](#️-shop-extras). The shop is split into server-rendered tabs
+(`?tab=featured|eggs|power-ups|cosmetics|pets|extras`, links in
+`ShopTabs.astro`), each its own cacheable page; buying lands back on the tab
+it came from. Their balance, history and inventory
+live in the wallet section of their account page (`/account#wallet`, also
+linked from the navbar coin chip); everyone can see what a player wears, but
+only they (and admins) see their balance and inventory.
+
+**Earning is derived, never stored** (`src/data/coins.ts`), like the poll and
+prediction bonuses, so a corrected score or withdrawn vote can't leave stale
+coins behind. Results pay once published (1st 10 · 2nd 7 · 3rd 5 · anyone else
+scored 2); activity pays once it locks in (entry 2 at the deadline, winner call
+1 at the deadline, People's Choice vote 1 when voting closes, poll vote 1 when
+the poll closes) and [mini-tasks](#-mini-tasks--achievements) pay 1–5 when an
+admin ticks the player off. Every number lives in `src/data/coin-rules.ts`, which `/rules`
+reads too. Wallets are per season: they belong to the season's player rows.
+
+**Stored facts:** `shop_items` (the site-wide catalogue, edited in
+`/admin/site#shop`), `coin_purchases` (price copied at purchase),
+`power_up_uses`, `equipped_items`, `coin_gifts`, `coin_adjustments` (admin
+grants and deductions, on the player's admin page), `item_gifts` and
+`egg_gifts` (see below), and the [shop extras](#️-shop-extras)' rows. A purchase or gift checks
+the balance against fresh (uncached) rows, then re-checks it in the insert
+under a per-player advisory lock, so concurrent spends can't overspend. A
+balance can go negative if a result is corrected after spending; buying is
+then blocked.
+
+**Gifting:** from the wallet, a player can send coins to anyone else in their
+season, up to 5 in any rolling 7 days (`GIFT_WEEKLY_CAP`), with an optional
+80-character note. The cap is re-checked in the insert under the sender's
+lock, and the recipient gets a notification.
+
+**Admin gifts:** on a player's admin page (`/admin/players/[id]`) an admin can
+gift Clim Coin (a positive `coin_adjustments` row) and any shop item: a pet,
+avatar, cosmetic or power-up, including retired, egg-exclusive and
+out-of-window ones. Like an egg prize, a gifted item is owned through a
+zero-price `coin_purchases` row, written with its `item_gifts` row (reason
+and admin's name) in one statement under the player's wallet lock. Items they
+already own, and power-ups whose effect they've had this season, can't be
+gifted. A gift can be taken back unless it's a power-up charge that's been
+spent (revoke the use in the week's judge tab first); that also unequips it.
+The player is notified and the gift shows in their wallet history.
+
+**Gifted eggs:** an admin can also gift a mystery egg (any crate in
+`coin-rules.ts`, on sale or not) from the same page. It's an `egg_gifts` row
+(reason and admin's name) that waits unopened in the player's inventory
+(`/account#inventory`); the player gets a notification. Cracking it
+(`POST /account/eggs/[giftId]`) rolls from their personal odds like a bought
+egg, then writes a zero-price `crate_opens` row (and its free purchase) and
+links it to the gift in one statement under the wallet lock, so an egg opens
+once. The reveal plays on the account page. An unopened egg can be taken
+back; a cracked one can't. Gifted eggs are hidden, and can't be opened,
+while the `shop_eggs` flag is off.
+
+**Limited-time stock:** `shop_items.available_from` / `available_until` (UK
+wall-clock, like task dates) set a sale window. Items with an end date sit on
+the shop's "limited time" shelf with a countdown; outside the window they
+can't be bought or hatched.
+
+**Limited stock:** `shop_items.stock` (blank = unlimited) caps how many the
+shop sells each season, first come first served; the card shows how many are
+left. Only direct shop purchases count: egg drops, admin gifts, skill rewards
+and marketplace resales don't use it up, and a sold-out item can still hatch.
+`buyItem` re-counts the season's sales under a per-item advisory lock, so two
+players can't both buy the last one.
+
+**Power-ups** are single use: a player can buy each one once a season
+(checked by effect, and enforced by a unique `power_up_uses (player_id,
+effect)` constraint) and use it from the wallet on the live week, one power-up
+per player per week. Uses are public immediately (task page feed):
+
+- **Golden Week**: the player's task score ×1.5 (rounded up) before positions
+  are decided. On team tasks only their own credit is boosted.
+- **Double Down**: a correct winner call pays +2 instead of +1.
+- **Taskmaster's Hint**: shows the week's `tasks.hint` (written on the brief
+  tab) to that player only.
+- **Sabotage**: −5 to any other player that week (squad-mates included); each
+  player can be sabotaged once a week, and the target is notified.
+- **Heist**: moves 5 points from another player to the user that week. It
+  shares Sabotage's one-hit-per-target limit, and Shields and Mirrors resolve
+  it the same way (a bounced Heist moves the points the other way).
+- **Freeze**: aimed at a player who hasn't used a power-up yet that week; they
+  can't use one for the rest of it (`getPowerUpBlock` → `frozen`). Public,
+  and Shields and Mirrors don't stop it.
+- **Spyglass**: privately reports whether the target held an unspent Shield
+  and/or Mirror at the moment it was used (`spyglassFindings`); the use is
+  public, the answer is only in the user's wallet.
+- **Coin Rush**: doubles every coin that week pays the player (placement,
+  entry, winner call and People's Choice vote), as a derived `coin-rush`
+  ledger line.
+- **Copycat**: copies a power-up another player used the week before
+  (`power_up_uses.copied_effect`); the use then acts as that effect everywhere
+  (`appliedEffect` in `coin-rules.ts`), target and all. It can't copy itself.
+
+Targeted power-ups (Sabotage, Heist, Freeze, Spyglass, or a Copycat of one)
+name a target; the write takes a per-week advisory lock so a Freeze and its
+target's own power-up, or two hits on one player, can't both slip through.
+
+**Passive power-ups** (`shield`, `mirror`, `insurance`, `bounty_badge`,
+`underdog`) are bought once a season like the others but never used: the database refuses them in
+`power_up_uses`, and their effect is derived in `coins.ts`:
+
+- **Shield** blocks, and **Mirror** bounces back onto the saboteur, the first
+  Sabotage or Heist on the owner used after they bought it (a Mirror is spent before a
+  Shield). The resolution is fixed when the Sabotage happens, but it's secret:
+  the target takes −5 as normal until the week's results are out, then the
+  deduction is dropped (Shield) or moved to the saboteur (Mirror), the task
+  feed says so and both players are notified.
+- **Insurance** pays 3rd-place coins instead of the base 2 for the first week
+  (whose deadline was after the purchase) where the owner finished last.
+- **Bounty Badge** pays 50% extra (rounded up, minted rather than taken from
+  anyone) on the first bounty the owner wins after buying it
+  (`bountyBadgeClaims`).
+- **Underdog** gives +5 points on the week after the owner finishes in the
+  bottom half (below the top `ceil(n / 2)` places) of two published weeks in
+  a row, counting weeks whose deadline was after the purchase
+  (`underdogClaims`). A week without the owner's score resets the run.
+
+**One Wish Willow** (`wish`, 10 coins, once a season, can hatch from eggs
+like any power-up) is spent from the wallet, any time, by writing a wish of
+up to 200 characters to the Taskmaster: a `wishes` row whose unique
+`purchase_id` is the charge it spends (the database refuses `wish` in
+`power_up_uses`). Wishes are private to the player and admins. They land in
+the wish inbox on the admin dashboard (`/admin#wishes`, every season), where
+an admin grants or declines each one with an optional reply. A decision is
+final, the wish is spent either way, and the player is notified. Granting
+doesn't do anything by itself: the admin makes it happen (e.g. with an
+admin gift). A gifted Willow can't be taken back once its wish is made.
+
+**Mystery eggs** (lootboxes, called crates in the code) sit behind the
+`shop_eggs` [feature flag](#-feature-flags), off by default. When on, they're on the shop page:
+a Mystery Egg (8 coins: Common 60%, Rare 28%, Epic 10%, Legendary 2%) and a
+Fabergé Egg (15 coins: Rare 55%, Epic 35%, Legendary 10%), defined in
+`coin-rules.ts` with pixel art (whole, and top/bottom halves) in
+`public/shop/eggs`. **Seasonal eggs** (`exclusive: true` with a sale window,
+e.g. the Haunted Egg for Halloween) are only on sale in their window and hatch
+only items whose `shop_items.crate_id` names them; no other egg drops those. An item's rarity comes from its price (≤7 common, 8–14
+rare, 15–19 epic, 20+ legendary). An egg only hatches available pets, avatars
+and cosmetics the player doesn't own yet, so there are no duplicates; an
+empty tier's chance is shared among the others, and the shop shows every
+viewer their exact odds. Each egg also has a small `powerUpChance` (Mystery 2%,
+Fabergé 5%, Haunted 3%) of hatching a power-up instead, picked from the ones
+the player hasn't had this season; it counts as that effect's one charge for
+the season, exactly like buying it. That chance is taken off the top of the
+other tiers and never scaled up, and an egg with only power-ups left for a
+player counts as empty, so it can't be farmed as a cheap power-up shop. The roll happens on the server
+(`crypto.getRandomValues`, from fresh rows) and is written to `crate_opens`,
+with a zero-price `coin_purchases` row so the prize is owned like anything
+bought. Items marked **egg exclusive** in the shop editor can't be bought
+directly. Cracks are public in the shop's "recently hatched" feed, and the
+player watches their egg wobble, crack and split open to reveal the prize.
+
+Effects are applied when the snapshot is derived (`competition.ts`), so
+revoking a use from the week's judge tab undoes it and returns the charge.
+Starter items and their pixel art (`public/shop`) are in `db/seed-data.ts`.
+
+**Skill trees** (`/skills`, behind the `skill_trees` [feature flag](#-feature-flags))
+let a player commit to one pathway a season and unlock it with Clim Coin. The
+five pathways (Stormbrewer, Elite Hacker, Friendkeeper, Overachiever and
+Elephant Cartographer, nods to storm mode and the squads) are defined in code
+in `src/data/skill-trees.ts`. Each has a root (5) and two branches (8 each,
+root first); each branch grows a spur (8) and then a tip (10), and the
+capstone (15) needs both branches: 72 coins for a full tree. `/skills` draws
+each pathway as a tree growing up from its root (`layoutSkillTree` in
+`src/lib/skill-ui.ts`); picking a node shows its card. Perks only ever touch
+Clim Coin, never points:
+
+- coin bonuses on entries, placings, calls, votes or power-ups used;
+- discounts on power-ups, eggs and wearables (pets, avatars and cosmetics);
+- luckier egg odds;
+- a higher weekly gift cap.
+
+The pathways are balanced on one value model: about 10 of each weekly event
+in a season, 5 poll votes, 4 power-ups used and about 5 discounted purchases
+of a kind. On that model every pathway's root is worth ~14 coins, its perk
+branch ~16, its title branch ~10, each spur ~11 to 12, its perk tip ~13 to 15,
+its title tip ~12 and its capstone ~24, so a full 72-coin tree pays back about
+113. Each node's perks are listed on its card, generated from
+the data. A test in `skill-trees.test.ts` fails if a retune breaks the balance.
+
+Earning perks are derived in `deriveEarnings` and only pay on coins that land
+after the node was unlocked, so they never pay out retroactively. Discounts
+are applied when a player buys, and the price paid is stored. The gift cap and
+egg odds come from current unlocks.
+
+The first unlock writes a `skill_paths` row (one per player, no respec). Each
+unlock is a `skill_unlocks` row at the price paid, and its composite key keeps
+every unlock in that pathway. `unlockSkillNode` writes in one statement under
+the wallet lock and re-checks the budget, prerequisites and pathway.
+
+Title and name-colour rewards are `shop_items` with `skill_only` set. They're
+never sold or hatched, are seeded by the `0027_skill_trees` and
+`0035_skill_tree_titles` migrations and
+`db/seed-data.ts`, and are owned through a zero-price `coin_purchases` row
+(`skill_unlocks.purchase_id`), like crate wins.
+
+Turning the flag off hides the page, its links and the pathway sigils. Anything
+already unlocked keeps working.
+
+**Marketplace** (`/market`, behind the `marketplace` [feature flag](#-feature-flags))
+lets players resell what they own to other players in their season. Pets,
+avatars, cosmetics, egg exclusives and unused power-up charges can be listed
+(`isTradeable` in `coin-rules.ts`). Skill tree rewards can't, and nor can
+passive power-ups (Shield, Mirror, Insurance, Bounty Badge, Underdog), because
+their charges are spent by derived effects that a sale couldn't re-check. The seller sets a price between 50% and
+300% of the shop price (5–60 for egg exclusives, `marketPriceRange`). Buyers
+pay that price or make a lower offer. There's no fee, and listings lapse after
+7 days (`MARKET_LISTING_DAYS`).
+
+- **Stored facts:** `market_listings` (one owned copy, the seller's
+  `coin_purchases` row, at a price), `market_offers` and `market_sales`.
+- **Ownership:** a sale writes the buyer a zero-price `coin_purchases` row,
+  like an egg prize. The seller's copy stops counting because a sale names it
+  (`source_purchase_id`), so ownership, equipping and power-up charges ignore
+  sold copies. Listed copies can't be worn or used. The shop, eggs and admin
+  gifts still go by "ever had this season", so an item can't be bought from
+  the shop and resold over and over.
+- **Expiry and holds are derived:** an open listing older than 7 days reads
+  as expired, and a pending offer holds the buyer's coins only while its
+  listing is live. Nothing has to run when they lapse. `Wallet.balance` is
+  what a player can spend after holds (`held` shows them), and the SQL
+  `budget` used by every spending write subtracts them too.
+- **Writes** (`src/data/market.ts`): each is one statement under the wallet
+  lock. A sale (a buy, or a seller accepting an offer) takes both players'
+  locks in a fixed order. It then re-checks that the listing is live at that
+  price, the copy is the seller's and unused, the buyer doesn't hold the item
+  (or a charge of that power-up), and they can afford it.
+- **Moderation:** admins take listings down at `/admin/market`. Closing a
+  season takes its open listings down. A gifted item that's been sold can't be
+  revoked.
+- **Notifications:** the seller hears about offers, sales and expired
+  listings; the buyer hears whether their offer was accepted or declined.
+
+### 🛍️ Shop extras
+
+Beyond buying items one at a time, the shop has a few extras. All of them
+spend through the same SQL `budget` and wallet lock as everything else
+(`src/data/shop.ts`), and post to `/account/shop-extras`.
+
+- **Deal of the week** (`shop_deals` flag): one item 30% off
+  (`DEAL_DISCOUNT_PERCENT`), Monday to Monday UK time. The pick is derived
+  (`pickDeal` in `src/data/shop-extras.ts`): a stable hash of the week over
+  everything sold directly, always on the shelves and at least 4 coins.
+  An admin can choose the item and discount (5–90%) for this week or the next
+  three at `/admin/site#deal` (`shop_deals` rows). Skill tree discounts come
+  off the deal price.
+- **Bundles** (`shop_bundles` flag): several items for one price, managed at
+  `/admin/site#bundles` (`shop_bundles` + `shop_bundle_items`). Buying one
+  writes a `bundle_purchases` row and a zero-price `coin_purchases` row per
+  item (`bundle_purchase_id`), in one statement under the wallet and stock
+  locks. It's refused if the player has had any item (or power-up effect) in
+  it. Bundle copies count towards limited stock.
+- **Weekly raffle** (`shop_raffle` flag): up to 5 tickets a player
+  (`RAFFLE_MAX_TICKETS`, 2 coins each) for the live week, one
+  `raffle_tickets` row per ticket. When the week's deadline passes, one ticket
+  wins the pot. The draw is derived (`drawRaffles`) from a hash of every
+  ticket's secret `nonce` (random, generated by Postgres and never shown), so
+  nobody can predict or steer it, and it never changes afterwards (tickets
+  can't be bought once the week closes).
+- **Rename tokens** (always on): bought any number of times (3 coins,
+  `rename_tokens`), then spent naming one of the player's pets (up to 24
+  characters). The newest spent token for a pet is its name, shown wherever
+  the pet appears.
+- **Gift wrap** (`shop_gift_wrap` flag): buy a pet, avatar or cosmetic (not a
+  power-up) for another player in the season who's never had it, for its
+  price plus a 2-coin fee (`GIFT_WRAP_FEE`). Optional 80-character note and
+  anonymous sender. The recipient owns it through a zero-price purchase
+  (`wrapped_gifts.purchase_id`) and is notified. A wrapped copy counts towards
+  limited stock.
+
+### 🎯 Bounties
+
+**Bounties** (`/bounties`, behind the `bounties` [feature flag](#-feature-flags))
+let a player put up 1–50 Clim Coin (`BOUNTY_REWARD_RANGE`) for a challenge
+("get a selfie with the CTO"). Other players in the season claim it, with an
+optional note, and the poster picks the winner. A player can have 3 open at
+once (`BOUNTY_OPEN_LIMIT`).
+
+- **Stored facts:** `bounties` (poster, title, reward, status, winner) and
+  `bounty_claims` (one per player per bounty).
+- **Escrow is derived:** an open bounty holds its reward from the poster's
+  wallet (`Wallet.held`, and the SQL `budget`), like a marketplace offer.
+  Awarding it moves the reward to the winner (`bounty-paid` / `bounty-won`
+  ledger lines, `Wallet.bountied`). Anything still open after 7 days
+  (`BOUNTY_DAYS`) reads as lapsed and the coins are free again; nothing has
+  to run.
+- **Rules:** the poster can take a bounty down only while nobody's claimed
+  it; after that they pick a winner, or it lapses. Players can't claim their
+  own, and claims and awards stay within the season.
+- **Writes** (`src/data/bounties.ts`): each is one statement that re-checks
+  the stored facts; posting runs under the poster's wallet lock and checks
+  their budget and open count. `runBountyAction` (`bounty-actions.ts`)
+  checks the rules against fresh rows first. Forms post to
+  `/account/bounties`.
+- **Moderation:** admins can award any open bounty to one of its claimants,
+  or cancel it, from `/admin/market#bounties`; their name is kept on it.
+- **Notifications:** the poster hears about each claim; the winner hears
+  they won.
+
+### 📈 Economy report
+
+`/admin/economy` (in the admin **activity** area) sums up one season's Clim
+Coin, derived from every player's wallet (`createEconomyQueries`), so it
+always agrees with what players see:
+
+- **Totals:** coins in circulation (spendable plus held), earned and
+  granted, spent and deducted, and passed between players.
+- **Supply by week** (UK Monday to Sunday): coins in, coins out and the
+  running total.
+- **By source:** task placements, entries, votes and predictions,
+  mini-tasks, skill perks, power-up bonuses (Coin Rush and Bounty Badge),
+  admin grants and deductions, shop purchases (including bundles, rename
+  tokens and gift wrap), eggs, skill unlocks, gifts, the marketplace, bounties
+  and raffle pots. Transfers count once,
+  on the receiving side.
+- **Top 10 holders**, and **shop sales and stock** per item (direct shop
+  purchases only, like limited stock) plus egg sales.
+
+## 🧩 Mini-tasks & achievements
+
+**Mini-tasks** are small daily or bonus challenges between the weekly tasks,
+worth 1–5 Clim Coin (`MINI_TASK_MAX_REWARD` in `src/data/mini-tasks.ts`, also
+a check on `mini_tasks.reward`). Each belongs to a season and runs from
+`starts_on` to `ends_on` (UK dates, inclusive); its status (upcoming, active,
+ended) is derived on every request. Admins create them in
+`/admin/site#mini-tasks` and tick off who did each one at
+`/admin/mini-tasks/<id>`, which writes `mini_task_completions` (with the
+admin's name, like `coin_adjustments`). The coin is **derived** from those
+rows in `deriveEarnings`, so unticking someone or deleting the mini-task
+takes it back. Players see what's running on the homepage and in their
+account (behind the `mini_tasks` flag) and get a notification when ticked.
+
+**Achievements** (`/account/achievements`, behind the `achievements` flag)
+are the season's long-term goals: 20 milestones in four groups (results,
+streaks, taking part, Clim Coin), each with a progress bar. The catalogue
+lives in `src/data/achievement-queries.ts` and is derived from the snapshot
+like everything else; nothing is stored. The public profile keeps its own
+smaller set of "current form" badges (`getPlayerAchievements`).
+
+## 🚩 Feature flags
+
+Site-wide switches an admin flips in `/admin/site#flags`, with no deploy.
+They're defined in `src/data/feature-flags.ts` and stored in `feature_flags`
+(with who last changed each one). A flag with no row is **off**, so a new
+feature ships disabled. Flags load with the rest of the competition rows
+(one round trip, edge-cached); toggling one is an admin write, so the cache
+is purged and the change shows straight away. Read them from
+`getQueries().features`.
+
+| Flag             | Off (default)                                                                                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `shop_eggs`      | Hides the mystery eggs, recent hatches and egg-exclusive items in the shop and rules; eggs can't be opened.                                                                                                                                                              |
+| `storm_mode`     | Clear skies. On: the public site (not `/admin`) is hit by a hurricane — rain, lightning, gusts, shake and "A Storm Is Brewing" blown across the screen. Pure CSS (`StormMode.astro` + `:root[data-storm]` in `global.css`), click-through, and still for reduced motion. |
+| `skill_trees`    | Hides `/skills`, its nav, shop and wallet links, the rules section and pathway sigils; nobody can unlock. Perks and rewards already unlocked keep working.                                                                                                               |
+| `mini_tasks`     | Hides the mini-task panels on the homepage and `/account`. Admins can still set mini-tasks and tick off completions, and coin already earned stays in wallets.                                                                                                           |
+| `achievements`   | Hides `/account/achievements` (404) and its links.                                                                                                                                                                                                                       |
+| `marketplace`    | Hides `/market`, `/account/market` (404) and their links, the rules section and the wallet's sell links; nobody can list, buy or offer. Open listings and offers lapse on their own.                                                                                     |
+| `bounties`       | Hides `/bounties` (404), its nav and palette links and bounty notifications; nobody can post, claim or award. Open bounties keep their coins held until they lapse.                                                                                                      |
+| `shop_deals`     | No deal of the week: everything sells at full price. Admin picks stay saved for when it's back on.                                                                                                                                                                       |
+| `shop_bundles`   | Hides bundles in the shop; nobody can buy one. Items already bought in one stay put.                                                                                                                                                                                     |
+| `shop_raffle`    | Hides the raffle on the extras tab; tickets can't be bought. Weeks already drawn still pay out.                                                                                                                                                                          |
+| `shop_gift_wrap` | Hides gift wrap on the extras tab; nobody can wrap. Gifts already sent stay put.                                                                                                                                                                                         |
+
 ## 🔔 Notifications
 
 Signed-in **players** get a bell in the navbar with an unread count. It opens
@@ -458,6 +898,13 @@ a dropdown (a full-height drawer on phones) listing the newest 20 events:
   player up the leaderboard.
 - **Bonuses and deductions** the player is given (not the automatic
   poll-voting, People's Choice or prediction bonuses).
+- **Sabotage, Heist and Freeze**, when another player uses one on them, and
+  once the week's results are out, whether a **Shield or Mirror** stopped a
+  Sabotage or Heist (its user hears about a bounce too).
+- **Gifts** of Clim Coin from another player, items gift-wrapped for them,
+  Clim Coin grants or items an admin gifted them, and **raffle wins**.
+- **Wishes** granted or declined by the Taskmaster, with their reply.
+- **Mini-tasks** an admin ticked them off for, with the coin it paid.
 
 Guests and admin accounts without a player profile don't see it.
 
@@ -473,16 +920,19 @@ which lists the feed with a "mark all read" button.
 
 Players sign in at `/login` (the same page admins use) with an email and
 password. Signing in takes them straight to the homepage (or back to the
-`/account` page that sent them to sign in). They edit **their own bio and
-avatar URL** at `/account`; changes are
-live immediately. Name, id, roster position, team and scores stay admin-only.
+`/account` page that sent them to sign in). They edit **their own bio** at
+`/account`; changes are live immediately. Their Clim Coin wallet is a section of the same page (`/account#wallet`). Name, id, avatar, roster position, team and scores stay admin-only.
 There is no public sign-up: admins invite players. Admins (including those
 who also play) land on `/admin` after signing in; an admin account without a
 player profile that tries to open `/account` is pointed to `/admin`.
 
-The navbar shows `login` to visitors. Once signed in it becomes an
-`account` dropdown (a flat list in the mobile menu) with `profile` for
-players, `admin` for admins, and `logout`. Logging out is a `POST` to
+The navbar shows `login` to visitors. Once signed in it becomes an account
+menu (the person icon; on phones, a collapsible section headed by their name
+and coin balance) with `profile` for players, `admin` for admins, and
+`logout`. The rest of the navbar keeps tasks, leaderboard and shop on the
+bar and groups everything else (play, clim coin, rankings, people) under
+`more`, which on phones is one collapsible section per group, with the
+current page's group open. The light/dark toggle is in the footer. Logging out is a `POST` to
 `/logout`. The session is only looked up when the request carries a Neon Auth
 session cookie, so anonymous page views make no auth call, and signed-in
 pages are sent `Cache-Control: private, no-store`.
@@ -599,8 +1049,8 @@ Run from the project root:
 | `npm test`                 | Run the unit tests (Vitest)                             |
 | `npm run test:watch`       | Run the unit tests in watch mode                        |
 | `npm run test:coverage`    | Run the unit tests with a coverage report (`coverage/`) |
-| `npm run lint`             | Lint TypeScript and Astro files (ESLint, incl. a11y)    |
-| `npm run format`           | Format the codebase with Prettier                       |
+| `npm run lint`             | Lint TypeScript and Astro files (Biome, incl. a11y)     |
+| `npm run format`           | Format the codebase with Biome                          |
 | `npm run format:check`     | Check formatting without writing changes                |
 | `npm run db:check`         | Run a test query against `DATABASE_URL`                 |
 | `npm run db:generate`      | Generate a SQL migration from the schema                |
@@ -609,7 +1059,11 @@ Run from the project root:
 | `npm run db:studio`        | Browse and edit data in Drizzle Studio                  |
 
 Before committing, keep `npm run check`, `npm run lint`, `npm test` and
-`npm run format:check` clean. Unit tests sit next to the code they cover
+`npm run format:check` clean. [Husky](https://typicode.github.io/husky/) git
+hooks (installed by `npm install`) enforce this: `pre-commit` runs `biome check
+--write` on staged files via lint-staged, and `pre-push` runs
+`format:check`, `lint`, `check` and `test`. Bypass in an emergency with
+`--no-verify`. Unit tests sit next to the code they cover
 (`src/data/*.test.ts`, `src/lib/*.test.ts`) and build their records with the
 helpers in `src/test/fixtures.ts`.
 

@@ -1,0 +1,372 @@
+---
+import AdminLayout from "../../layouts/AdminLayout.astro";
+import TerminalWindow from "../../components/TerminalWindow.astro";
+import StatCard from "../../components/StatCard.astro";
+import CoinAmount from "../../components/CoinAmount.astro";
+import { tableCell, tableHead } from "../../components/admin/styles";
+import { CATEGORY_INFO } from "../../data/coins";
+import { selectedSeason } from "../../lib/admin-season";
+import { ukDateFormat } from "../../lib/time";
+import { withBase } from "../../lib/url";
+import type { EconomyFlow } from "../../types";
+
+// Fail closed if the middleware guard is ever bypassed.
+if (!Astro.locals.admin) return Astro.redirect(withBase("/login"));
+
+const season = selectedSeason(Astro.url, await Astro.locals.getSeasons());
+const queries = await Astro.locals.getQueries(season?.id);
+const report = queries.getEconomyReport();
+
+const FLOWS: Record<EconomyFlow, { label: string; bar: string; sign: string }> =
+  {
+    earned: { label: "earned", bar: "bg-acid/70", sign: "+" },
+    granted: { label: "granted", bar: "bg-cyan/70", sign: "+" },
+    spent: { label: "spent", bar: "bg-magenta/70", sign: "−" },
+    moved: { label: "moved", bar: "bg-amber/60", sign: "⇄" },
+  };
+const widthOf = (value: number, max: number) =>
+  `width: ${max > 0 ? Math.max((value / max) * 100, value > 0 ? 2 : 0) : 0}%`;
+const sourceMax = Math.max(0, ...report.sources.map((s) => s.amount));
+const weekMax = Math.max(
+  0,
+  ...report.weeks.flatMap((w) => [w.minted, w.burned]),
+);
+const holderMax = Math.max(
+  0,
+  ...report.holders.map((h) => h.balance + h.held),
+);
+const weekFmt = ukDateFormat({ day: "numeric", month: "short" });
+const weekLabel = (date: string) =>
+  weekFmt.format(new Date(`${date}T12:00:00Z`));
+const sectionHeading =
+  "mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint";
+---
+
+<AdminLayout title="Clim Coin economy">
+  <h1 class="text-2xl font-extrabold tracking-tight text-ink">
+    <span class="text-acid">$</span> economy --report
+  </h1>
+  <p class="mt-1 max-w-prose text-sm text-ink-dim">
+    Where {season?.name ?? "the season"}'s Clim Coin came from and where it
+    went, worked out from every player's wallet. Use it to judge prices and
+    payouts; the <a
+      href={withBase("/admin/activity")}
+      class="text-cyan hover:underline">activity log</a
+    > has the line-by-line history.
+  </p>
+
+  <div class="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <StatCard
+      value={report.circulating}
+      label={report.held > 0
+        ? `in circulation (${report.held} held)`
+        : "in circulation"}
+      command="sum(wallets)"
+      accent="amber"
+    />
+    <StatCard
+      value={report.minted}
+      label="earned & granted"
+      command="coins --in"
+    />
+    <StatCard
+      value={report.burned}
+      label="spent & deducted"
+      command="coins --out"
+      accent="magenta"
+    />
+    <StatCard
+      value={report.moved}
+      label="passed between players"
+      command="coins --moved"
+      accent="cyan"
+    />
+  </div>
+
+  <section id="weeks" aria-labelledby="weeks-heading" class="mt-10 scroll-mt-24">
+    <h2 id="weeks-heading" class={sectionHeading}>supply by week</h2>
+    <TerminalWindow title="~/economy/weekly.log" bodyClass="p-0 sm:p-0">
+      {
+        report.weeks.length === 0 ? (
+          <p class="p-6 text-sm text-ink-faint">no coins have moved yet.</p>
+        ) : (
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr>
+                  <th scope="col" class={tableHead}>
+                    week of
+                  </th>
+                  <th scope="col" class:list={[tableHead, "w-1/2"]}>
+                    <span class="text-acid">in</span> /{" "}
+                    <span class="text-magenta">out</span>
+                  </th>
+                  <th scope="col" class:list={[tableHead, "text-right"]}>
+                    in circulation
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.weeks.map((week) => (
+                  <tr>
+                    <td class:list={[tableCell, "whitespace-nowrap text-ink-dim"]}>
+                      <time datetime={week.weekStart}>
+                        {weekLabel(week.weekStart)}
+                      </time>
+                    </td>
+                    <td class={tableCell}>
+                      <div class="space-y-1">
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="h-2 rounded-sm bg-acid/70"
+                            style={widthOf(week.minted, weekMax)}
+                            aria-hidden="true"
+                          />
+                          <span class="text-[11px] tabular-nums text-acid">
+                            +{week.minted}
+                          </span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span
+                            class="h-2 rounded-sm bg-magenta/70"
+                            style={widthOf(week.burned, weekMax)}
+                            aria-hidden="true"
+                          />
+                          <span class="text-[11px] tabular-nums text-magenta">
+                            −{week.burned}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "text-right font-bold tabular-nums text-ink",
+                      ]}
+                    >
+                      {week.circulating}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </TerminalWindow>
+  </section>
+
+  <div class="mt-10 grid gap-8 lg:grid-cols-2">
+    <section
+      id="sources"
+      aria-labelledby="sources-heading"
+      class="min-w-0 scroll-mt-24"
+    >
+      <h2 id="sources-heading" class={sectionHeading}>by source</h2>
+      <TerminalWindow title="~/economy/sources">
+        {
+          report.sources.length === 0 ? (
+            <p class="p-2 text-sm text-ink-faint">nothing yet.</p>
+          ) : (
+            <ul class="space-y-3 p-1">
+              {report.sources.map((row) => (
+                <li>
+                  <div class="flex items-baseline justify-between gap-3 text-xs">
+                    <span class="text-ink">
+                      {row.label}{" "}
+                      <span class="text-[10px] uppercase tracking-[0.2em] text-ink-faint">
+                        {FLOWS[row.flow].label}
+                      </span>
+                    </span>
+                    <span class="tabular-nums text-ink-dim">
+                      {FLOWS[row.flow].sign}
+                      {row.amount}
+                      <span class="text-ink-faint"> · {row.count}×</span>
+                    </span>
+                  </div>
+                  <span
+                    class:list={[
+                      "mt-1 block h-1.5 rounded-sm",
+                      FLOWS[row.flow].bar,
+                    ]}
+                    style={widthOf(row.amount, sourceMax)}
+                    aria-hidden="true"
+                  />
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </TerminalWindow>
+    </section>
+
+    <section
+      id="holders"
+      aria-labelledby="holders-heading"
+      class="min-w-0 scroll-mt-24"
+    >
+      <h2 id="holders-heading" class={sectionHeading}>
+        top {report.holders.length} holders
+      </h2>
+      <TerminalWindow title="~/economy/rich-list">
+        {
+          report.holders.length === 0 ? (
+            <p class="p-2 text-sm text-ink-faint">no players this season.</p>
+          ) : (
+            <ol class="space-y-3 p-1">
+              {report.holders.map((holder, i) => (
+                <li>
+                  <div class="flex items-baseline justify-between gap-3 text-xs">
+                    <span class="min-w-0 truncate">
+                      <span class="tabular-nums text-ink-faint">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>{" "}
+                      <a
+                        href={withBase(`/admin/players/${holder.player.id}`)}
+                        class="text-ink hover:text-acid"
+                      >
+                        {holder.player.name}
+                      </a>
+                    </span>
+                    <span class="shrink-0">
+                      <CoinAmount amount={holder.balance} class="text-amber" />
+                      {holder.held > 0 && (
+                        <span class="text-ink-faint"> +{holder.held} held</span>
+                      )}
+                    </span>
+                  </div>
+                  <span
+                    class="mt-1 block h-1.5 rounded-sm bg-amber/60"
+                    style={widthOf(holder.balance + holder.held, holderMax)}
+                    aria-hidden="true"
+                  />
+                </li>
+              ))}
+            </ol>
+          )
+        }
+      </TerminalWindow>
+    </section>
+  </div>
+
+  <section id="shop" aria-labelledby="shop-heading" class="mt-10 scroll-mt-24">
+    <h2 id="shop-heading" class={sectionHeading}>shop sales & stock</h2>
+    <TerminalWindow title="~/economy/shop" bodyClass="p-0 sm:p-0">
+      {
+        report.shop.length === 0 && report.crates.length === 0 ? (
+          <p class="p-6 text-sm text-ink-faint">nothing on sale or sold.</p>
+        ) : (
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr>
+                  <th scope="col" class={tableHead}>
+                    item
+                  </th>
+                  <th
+                    scope="col"
+                    class:list={[tableHead, "hidden sm:table-cell"]}
+                  >
+                    price
+                  </th>
+                  <th scope="col" class:list={[tableHead, "text-right"]}>
+                    sold
+                  </th>
+                  <th scope="col" class:list={[tableHead, "text-right"]}>
+                    revenue
+                  </th>
+                  <th scope="col" class:list={[tableHead, "text-right"]}>
+                    stock left
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.shop.map((row) => (
+                  <tr>
+                    <td class={tableCell}>
+                      <a
+                        href={withBase(`/admin/shop/${row.item.id}`)}
+                        class="font-bold text-ink hover:text-acid"
+                      >
+                        {row.item.name}
+                      </a>
+                      <span class="block text-[11px] text-ink-faint">
+                        {CATEGORY_INFO[row.item.category].label}
+                        {!row.onSale && " · off sale"}
+                      </span>
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "hidden tabular-nums text-ink-dim sm:table-cell",
+                      ]}
+                    >
+                      {row.item.price}
+                    </td>
+                    <td class:list={[tableCell, "text-right tabular-nums"]}>
+                      {row.sold}
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "text-right tabular-nums text-amber",
+                      ]}
+                    >
+                      {row.revenue}
+                    </td>
+                    <td class:list={[tableCell, "text-right tabular-nums"]}>
+                      {row.stockLeft === undefined ? (
+                        <span class="text-ink-faint">unlimited</span>
+                      ) : row.stockLeft === 0 ? (
+                        <span class="font-bold text-amber">SOLD OUT</span>
+                      ) : (
+                        row.stockLeft
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {report.crates.map((row) => (
+                  <tr>
+                    <td class={tableCell}>
+                      <span class="font-bold text-ink">{row.name}</span>
+                      <span class="block text-[11px] text-ink-faint">
+                        mystery egg · {row.opened} opened
+                      </span>
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "hidden text-ink-faint sm:table-cell",
+                      ]}
+                    >
+                      varies
+                    </td>
+                    <td class:list={[tableCell, "text-right tabular-nums"]}>
+                      {row.opened}
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "text-right tabular-nums text-amber",
+                      ]}
+                    >
+                      {row.revenue}
+                    </td>
+                    <td
+                      class:list={[
+                        tableCell,
+                        "text-right text-ink-faint",
+                      ]}
+                    >
+                      unlimited
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      }
+    </TerminalWindow>
+  </section>
+</AdminLayout>

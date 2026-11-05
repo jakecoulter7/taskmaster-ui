@@ -45,7 +45,19 @@ import { createGalleryQueries } from "./gallery-queries";
 import { createPredictionQueries } from "./prediction-queries";
 import { createLiveQueries } from "./live-queries";
 import { createRulesQueries } from "./rules-queries";
-import { withBase } from "../lib/url";
+import { createStreakQueries } from "./streak-queries";
+import { createWrappedQueries } from "./wrapped-queries";
+import { createCoinQueries } from "./coin-queries";
+import { createMarketQueries } from "./market-queries";
+import { createBountyQueries } from "./bounty-queries";
+import { createEconomyQueries } from "./economy-queries";
+import { createSkillQueries } from "./skill-queries";
+import { createMiniTaskQueries } from "./mini-task-queries";
+import { createDailyBonusQueries } from "./daily-bonus-queries";
+import { createAchievementQueries } from "./achievement-queries";
+import { createActivityQueries } from "./activity-queries";
+import { isWrappedLive } from "./seasons";
+import { assetUrl, withBase } from "../lib/url";
 import { ADMIN_HOME, ADMIN_SECTIONS } from "../lib/admin-nav";
 
 // This module is the single "data layer" the UI talks to. Pages read these
@@ -68,6 +80,8 @@ export function createQueries(data: CompetitionData) {
     recaps,
     changelog,
   } = data;
+
+  const coinQueries = createCoinQueries(data);
 
   function getPlayerById(id: string): Player | undefined {
     return players.find((p) => p.id === id);
@@ -320,6 +334,18 @@ export function createQueries(data: CompetitionData) {
 
     const results: TaskResult[] = [];
     for (const task of completed) {
+      if (task.format === "team") {
+        const [top] = getTeamResults(task.id);
+        if (top) {
+          results.push({
+            task,
+            winnerName: top.team.name,
+            winningScore: top.points,
+            completionDate: task.deadline,
+          });
+        }
+        continue;
+      }
       const winnerScore = scores.find(
         (s) => s.taskId === task.id && s.position === 1,
       );
@@ -329,7 +355,7 @@ export function createQueries(data: CompetitionData) {
       if (winnerScore && winner) {
         results.push({
           task,
-          winner,
+          winnerName: winner.name,
           winningScore: winnerScore.points,
           completionDate: task.deadline,
         });
@@ -658,8 +684,14 @@ export function createQueries(data: CompetitionData) {
     return assignment;
   })();
 
-  /** Root-relative path to the avatar image assigned to this player. */
+  /**
+   * The player's avatar image: their equipped Clim Coin avatar, else the
+   * generated icon assigned to them. A root-relative path or https URL; give
+   * it to `assetUrl`.
+   */
   function getPlayerIcon(player: Pick<Player, "id">): string {
+    const equipped = coinQueries.getEquippedAvatarUrl(player.id);
+    if (equipped) return equipped;
     const index =
       playerIconIndex.get(player.id) ??
       hashString(player.id) % PLAYER_ICON_COUNT;
@@ -913,7 +945,7 @@ export function createQueries(data: CompetitionData) {
       return {
         id: row.player.id,
         name: row.player.name,
-        icon: withBase(getPlayerIcon(row.player)),
+        icon: assetUrl(getPlayerIcon(row.player)),
         rank: row.rank,
         points: row.points,
         wins: row.wins,
@@ -1008,7 +1040,7 @@ export function createQueries(data: CompetitionData) {
     const climber = [...leaderboard]
       .filter((row) => typeof row.movement === "number" && row.movement > 0)
       .sort((a, b) => (b.movement ?? 0) - (a.movement ?? 0))[0];
-    if (climber && climber.movement) {
+    if (climber?.movement) {
       awards.push({
         id: "climber",
         title: "Biggest Climber",
@@ -1190,6 +1222,17 @@ export function createQueries(data: CompetitionData) {
         hint: s.status === "closed" ? "final standings" : "season",
         keywords: `season cohort archive past ${s.id}`,
       }));
+    // Every closed season's wrapped, including the current one's.
+    const wrappedItems: CommandPaletteItem[] = seasons
+      .filter(isWrappedLive)
+      .map((s) => ({
+        id: `wrapped-${s.id}`,
+        label: `${s.name} Wrapped`,
+        group: "page" as const,
+        href: withBase(`/seasons/${s.id}/wrapped`),
+        hint: "the season in review",
+        keywords: `wrapped review recap summary year end streaks ${s.id}`,
+      }));
 
     const taskItems: CommandPaletteItem[] = [...tasks]
       .sort((a, b) => a.weekNumber - b.weekNumber)
@@ -1260,9 +1303,70 @@ export function createQueries(data: CompetitionData) {
         }))
       : [];
 
+    const skillItems: CommandPaletteItem[] = data.features.skill_trees
+      ? [
+          {
+            id: "page-skills",
+            label: "Skill trees",
+            group: "page",
+            href: withBase("/skills"),
+            hint: "spend clim coin on a pathway",
+            keywords:
+              "skills skill tree pathway perks stormbrewer elite hacker friendkeeper overachiever elephant cartographer clim coin",
+          },
+        ]
+      : [];
+
+    const marketItems: CommandPaletteItem[] = data.features.marketplace
+      ? [
+          {
+            id: "page-market",
+            label: "Marketplace",
+            group: "page",
+            href: withBase("/market"),
+            hint: "buy and sell items with other players",
+            keywords:
+              "market marketplace trade sell buy offer listing clim coin cosmetics power-ups hint",
+          },
+        ]
+      : [];
+
+    const bountyItems: CommandPaletteItem[] = data.features.bounties
+      ? [
+          {
+            id: "page-bounties",
+            label: "Bounties",
+            group: "page",
+            href: withBase("/bounties"),
+            hint: "put up clim coin for a challenge, or claim one",
+            keywords:
+              "bounties bounty board challenge dare reward claim clim coin",
+          },
+        ]
+      : [];
+
+    const poolItems: CommandPaletteItem[] = data.features.pool_bracket
+      ? [
+          {
+            id: "page-pool",
+            label: "Pool Master",
+            group: "page",
+            href: withBase("/pool"),
+            hint: "the weekly pool knockout bracket",
+            keywords:
+              "pool master bracket knockout tournament duos pairs draw match winner leaderboard",
+          },
+        ]
+      : [];
+
     return [
       ...PALETTE_PAGES,
+      ...skillItems,
+      ...marketItems,
+      ...bountyItems,
+      ...poolItems,
       ...seasonItems,
+      ...wrappedItems,
       ...taskItems,
       ...teamItems,
       ...playerItems,
@@ -1606,8 +1710,28 @@ export function createQueries(data: CompetitionData) {
       }));
   }
 
+  const streakQueries = createStreakQueries(data, {
+    getLeaderboard,
+    standingsUpToWeek,
+  });
+  const wrappedQueries = createWrappedQueries(data, {
+    getLeaderboard,
+    getTeamLeaderboard,
+    getTeamForPlayer,
+    getAwards,
+    getCompetitionStats,
+    getPlayerResults,
+    getPlayerBonusSummary,
+    getPlayerProgressionChart,
+    ...streakQueries,
+  });
+
+  const miniTaskQueries = createMiniTaskQueries(data);
+
   return {
     season: data.season,
+    /** Site-wide feature flags (off unless an admin turned them on). */
+    features: data.features,
     players,
     teams,
     tasks,
@@ -1655,11 +1779,34 @@ export function createQueries(data: CompetitionData) {
     getLostArchive,
     ...createPollQueries(data),
     getPlayerRankHistory,
-    ...createNotificationQueries(data, { getPlayerRankHistory }),
+    ...createNotificationQueries(data, {
+      getPlayerRankHistory,
+      getSabotagesOf: coinQueries.getSabotagesOf,
+      getSabotagesBy: coinQueries.getSabotagesBy,
+    }),
     ...createSubmissionQueries(data),
     ...createGalleryQueries(data),
     ...createPredictionQueries(data),
     ...createLiveQueries(data),
     ...createRulesQueries(data),
+    ...streakQueries,
+    ...wrappedQueries,
+    ...coinQueries,
+    ...createMarketQueries(data, { getWallet: coinQueries.getWallet }),
+    ...createBountyQueries(data, { getWallet: coinQueries.getWallet }),
+    ...createEconomyQueries(data, { getWallet: coinQueries.getWallet }),
+    ...createSkillQueries(data, {
+      getBalance: (playerId) => coinQueries.getWallet(playerId).balance,
+      getSkillPerks: coinQueries.getSkillPerks,
+    }),
+    ...miniTaskQueries,
+    ...createDailyBonusQueries(data),
+    ...createActivityQueries(data),
+    ...createAchievementQueries(data, {
+      getLeaderboardWithMovement,
+      getPlayerResults,
+      getWallet: coinQueries.getWallet,
+      getMiniTaskCount: miniTaskQueries.getMiniTaskCount,
+    }),
   };
 }

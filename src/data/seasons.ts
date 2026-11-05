@@ -107,9 +107,17 @@ export function isSeasonPublic(season: Season): boolean {
 }
 
 /**
+ * Whether a season's "wrapped" is live for the public: once it's closed and
+ * its champion crowned. Admins can preview it before then.
+ */
+export function isWrappedLive(season: Season): boolean {
+  return season.status === "closed";
+}
+
+/**
  * Narrows every row to one season: its roster, squads and weeks, and the
- * scores, bonuses, votes, predictions and recaps for those weeks. Polls and
- * the changelog are site-wide; a poll's vote bonus only counts when it lands
+ * scores, bonuses, votes, predictions, recaps and Clim Coin records for
+ * those weeks and players. Polls, the changelog and the shop are site-wide; a poll's vote bonus only counts when it lands
  * in one of the season's weeks and the voter is on its roster.
  */
 export function rowsForSeason(
@@ -128,6 +136,12 @@ export function rowsForSeason(
   const bySeasonPlayers = <Row extends { taskId: string; playerId: string }>(
     list: Row[],
   ) => forWeeks(list).filter((row) => playerIds.has(row.playerId));
+  const forPlayers = <Row extends { playerId: string }>(list: Row[]) =>
+    list.filter((row) => playerIds.has(row.playerId));
+  const marketListingRows = inSeason(rows.marketListingRows);
+  const listingIds = new Set(marketListingRows.map((row) => row.id));
+  const bountyRows = inSeason(rows.bountyRows);
+  const bountyIds = new Set(bountyRows.map((row) => row.id));
   return {
     ...rows,
     playerRows,
@@ -140,5 +154,40 @@ export function rowsForSeason(
     peoplesChoiceRows: bySeasonPlayers(rows.peoplesChoiceRows),
     predictionRows: bySeasonPlayers(rows.predictionRows),
     recapRows: forWeeks(rows.recapRows),
+    // Wallets are per season: the season's players' purchases, uses on its
+    // weeks, equipped items, grants, item and egg gifts, wishes and skill trees. The catalogue is site-wide.
+    coinPurchaseRows: forPlayers(rows.coinPurchaseRows),
+    powerUpUseRows: bySeasonPlayers(rows.powerUpUseRows),
+    equippedRows: forPlayers(rows.equippedRows),
+    coinAdjustmentRows: forPlayers(rows.coinAdjustmentRows),
+    entryRows: bySeasonPlayers(rows.entryRows),
+    crateOpenRows: forPlayers(rows.crateOpenRows),
+    coinGiftRows: inSeason(rows.coinGiftRows),
+    itemGiftRows: forPlayers(rows.itemGiftRows),
+    eggGiftRows: forPlayers(rows.eggGiftRows),
+    wishRows: forPlayers(rows.wishRows),
+    skillPathRows: forPlayers(rows.skillPathRows),
+    skillUnlockRows: forPlayers(rows.skillUnlockRows),
+    miniTaskRows: inSeason(rows.miniTaskRows),
+    miniTaskCompletionRows: inSeason(rows.miniTaskCompletionRows),
+    // The marketplace is per season too: offers go with their listing.
+    marketListingRows,
+    marketOfferRows: rows.marketOfferRows.filter((row) =>
+      listingIds.has(row.listingId),
+    ),
+    marketSaleRows: inSeason(rows.marketSaleRows),
+    // Bounties are per season too: claims go with their bounty.
+    bountyRows,
+    bountyClaimRows: rows.bountyClaimRows.filter((row) =>
+      bountyIds.has(row.bountyId),
+    ),
+    // Shop extras: raffle tickets on its weeks, and its players' rename
+    // tokens, gift-wrapped items and bundles. Bundles and deals are site-wide.
+    raffleTicketRows: bySeasonPlayers(rows.raffleTicketRows),
+    renameTokenRows: forPlayers(rows.renameTokenRows),
+    wrappedGiftRows: inSeason(rows.wrappedGiftRows),
+    bundlePurchaseRows: forPlayers(rows.bundlePurchaseRows),
+    dailyBonusRewardRows: inSeason(rows.dailyBonusRewardRows),
+    dailyBonusClaimRows: inSeason(rows.dailyBonusClaimRows),
   };
 }

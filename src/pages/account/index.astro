@@ -4,10 +4,28 @@ import TerminalWindow from "../../components/TerminalWindow.astro";
 import AdminField from "../../components/admin/AdminField.astro";
 import Notice from "../../components/admin/Notice.astro";
 import PlayerAvatar from "../../components/PlayerAvatar.astro";
+import WalletSection from "../../components/WalletSection.astro";
+import MiniTaskList from "../../components/MiniTaskList.astro";
+import DailyBonusPanel from "../../components/DailyBonusPanel.astro";
+import CoinAmount from "../../components/CoinAmount.astro";
+import CrateReveal from "../../components/CrateReveal.astro";
 import { btnPrimary, btnGhost } from "../../components/admin/styles";
 import { updateOwnProfile } from "../../data/accounts";
-import { parseProfileForm } from "../../lib/account-forms";
+import { runWalletAction } from "../../data/wallet-actions";
+import { parseProfileForm, parseWalletAction } from "../../lib/account-forms";
 import type { FieldErrors, FormValues } from "../../lib/admin-forms";
+import {
+  COIN_OUTCOME_NOTICE,
+  DAILY_BONUS_OUTCOME_NOTICE,
+  parseCoinOutcome,
+  parseDailyBonusOutcome,
+} from "../../lib/coin-ui";
+import {
+  LIST_PAGE_SIZE,
+  pageHref,
+  paginate,
+  parsePage,
+} from "../../lib/pagination";
 import { withBase } from "../../lib/url";
 
 // Fail closed if the middleware guard is ever bypassed.
@@ -16,14 +34,28 @@ if (!player || player.mustChangePassword) {
   return Astro.redirect(withBase("/login"));
 }
 
-let values: FormValues = {
-  bio: player.bio ?? "",
-  avatarUrl: player.avatarUrl ?? "",
-};
+let values: FormValues = { bio: player.bio ?? "" };
 let errors: FieldErrors = {};
 
+// The player's wallet is per season: the season their roster row is in.
+const season = (await Astro.locals.getSeasons()).seasonOfPlayer(
+  player.playerId,
+);
+
 if (Astro.request.method === "POST") {
-  const parsed = parseProfileForm(await Astro.request.formData());
+  const form = await Astro.request.formData();
+  // Wallet forms carry an `intent`; the profile form doesn't.
+  if (form.has("intent")) {
+    const action = parseWalletAction(form);
+    const outcome =
+      action && season
+        ? await runWalletAction(player.playerId, season, action, (id) =>
+            Astro.locals.getQueries(id),
+          )
+        : "invalid";
+    return Astro.redirect(withBase(`/account?coins=${outcome}#wallet`), 303);
+  }
+  const parsed = parseProfileForm(form);
   values = parsed.values;
   if (!parsed.ok) {
     errors = parsed.errors;
@@ -32,6 +64,63 @@ if (Astro.request.method === "POST") {
     return Astro.redirect(withBase("/account?done=saved"));
   }
 }
+
+const coinOutcome = parseCoinOutcome(Astro.url.searchParams.get("coins"));
+// Just cracked a gifted egg: reveal what hatched.
+const pullId = Number(Astro.url.searchParams.get("pull"));
+
+const walletView = season
+  ? await Astro.locals.getQueries(season.id).then((q) => {
+      const wallet = q.getWallet(player.playerId);
+      const panel = q.getPowerUpPanel(player.playerId);
+      return {
+        wallet,
+        panel,
+        gifts: q.getGiftPanel(player.playerId),
+        skillTrees: q.skillTreesOn,
+        market: q.marketEnabled,
+        wish: q.getWishPanel(player.playerId),
+        inventory: q.getInventory(player.playerId),
+        eggs: q.getUnopenedEggs(player.playerId),
+        hint: panel.task
+          ? q.getUnlockedHint(panel.task.id, player.playerId)
+          : undefined,
+        ledgerPage: paginate(
+          wallet.ledger,
+          parsePage(Astro.url.searchParams.get("history")),
+          LIST_PAGE_SIZE,
+        ),
+      };
+    })
+  : undefined;
+const seasonQueries = await Astro.locals.getQueries(season?.id);
+const shellPrompt = season
+  ? seasonQueries.getLoadout(player.playerId).shellPrompt
+  : undefined;
+const pull =
+  season && coinOutcome === "opened" && Number.isInteger(pullId)
+    ? seasonQueries.getCratePull(pullId, player.playerId)
+    : undefined;
+const miniTasks = seasonQueries.features.mini_tasks
+  ? seasonQueries.getMiniTaskBoard(player.playerId)
+  : undefined;
+const dailyBonus = season
+  ? seasonQueries.getDailyBonusPanel(player.playerId)
+  : undefined;
+const dailyOutcome = parseDailyBonusOutcome(
+  Astro.url.searchParams.get("daily"),
+);
+const dailyNotice = dailyOutcome
+  ? DAILY_BONUS_OUTCOME_NOTICE[dailyOutcome]
+  : undefined;
+const achievementsOn = seasonQueries.features.achievements;
+const ledgerHref = (page: number) =>
+  pageHref(Astro.url, "history", page, {
+    hash: "history",
+    drop: ["coins", "done", "pull", "daily"],
+  });
+const coinNotice =
+  coinOutcome && !pull ? COIN_OUTCOME_NOTICE[coinOutcome] : undefined;
 
 const done = Astro.url.searchParams.get("done");
 const notices: Record<string, string> = {
@@ -47,7 +136,7 @@ const avatarPreview = {
 ---
 
 <Layout title="Your account">
-  <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
+  <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-14">
     <header class="flex flex-wrap items-end justify-between gap-4">
       <div class="flex items-center gap-4">
         <PlayerAvatar player={avatarPreview} class="h-14 w-14 rounded-md" />
@@ -60,12 +149,29 @@ const avatarPreview = {
           <h1 class="mt-1 text-3xl font-extrabold tracking-tight text-ink">
             {player.playerName}
           </h1>
+          {
+            shellPrompt && (
+              <p class="mt-1 truncate text-xs text-acid">
+                {shellPrompt}
+                <span class="caret" aria-hidden="true"></span>
+              </p>
+            )
+          }
           <p class="mt-1 text-xs text-ink-faint">{player.email}</p>
         </div>
       </div>
-      <a href={withBase(`/players/${player.playerId}`)} class={btnGhost}>
-        view public profile →
-      </a>
+      <div class="flex flex-wrap gap-3">
+        {
+          achievementsOn && (
+            <a href={withBase("/account/achievements")} class={btnGhost}>
+              achievements →
+            </a>
+          )
+        }
+        <a href={withBase(`/players/${player.playerId}`)} class={btnGhost}>
+          view public profile →
+        </a>
+      </div>
     </header>
 
     {
@@ -90,23 +196,77 @@ const avatarPreview = {
           rows={5}
           hint="Shown on your public player page. Up to 500 characters."
         />
-        <AdminField
-          label="avatar url"
-          name="avatarUrl"
-          type="url"
-          value={values.avatarUrl}
-          error={errors.avatarUrl}
-          placeholder="https://…"
-          hint="An https:// image link (or a /site path). Leave blank for a generated icon."
-        />
         <p class="text-xs text-ink-faint">
-          Your name, team and scores are managed by the Taskmaster.
+          Your name, avatar, team and scores are managed by the Taskmaster.
         </p>
         <button type="submit" class={btnPrimary}>save profile</button>
       </form>
     </TerminalWindow>
 
-    <section aria-labelledby="security-heading" class="mt-10">
+    {
+      dailyBonus && (
+        <DailyBonusPanel panel={dailyBonus} notice={dailyNotice} class="mt-12" />
+      )
+    }
+
+    {
+      miniTasks && (
+        <section
+          id="mini-tasks"
+          class="mt-12 scroll-mt-24"
+          aria-labelledby="mini-tasks-heading"
+        >
+          <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+            <h2
+              id="mini-tasks-heading"
+              class="text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+            >
+              mini-tasks
+            </h2>
+            <p class="text-xs text-ink-faint">
+              {miniTasks.completedCount} done this season ·{" "}
+              <CoinAmount amount={miniTasks.coinsEarned} class="text-amber" />{" "}
+              earned
+            </p>
+          </div>
+          <TerminalWindow
+            title="~/mini-tasks"
+            meta="ticked off by the Taskmaster"
+          >
+            <MiniTaskList
+              items={miniTasks.active}
+              showProgress
+              emptyText="No mini-tasks running today. Check back soon."
+            />
+            {miniTasks.upcoming.length > 0 && (
+              <>
+                <h3 class="mt-6 mb-3 text-[10px] font-bold uppercase tracking-[0.2em] text-ink-faint">
+                  coming up
+                </h3>
+                <MiniTaskList items={miniTasks.upcoming} />
+              </>
+            )}
+          </TerminalWindow>
+        </section>
+      )
+    }
+
+    {pull && <CrateReveal pull={pull} class="mt-12" />}
+
+    {
+      walletView && season && (
+        <WalletSection
+          {...walletView}
+          seasonName={season.name}
+          seasonClosed={season.status === "closed"}
+          ledgerHref={ledgerHref}
+          notice={coinNotice}
+          class="mt-12"
+        />
+      )
+    }
+
+    <section aria-labelledby="security-heading" class="mt-12">
       <h2
         id="security-heading"
         class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"

@@ -1,0 +1,116 @@
+---
+import AdminLayout from "../../../../layouts/AdminLayout.astro";
+import TerminalWindow from "../../../../components/TerminalWindow.astro";
+import BundleForm from "../../../../components/admin/BundleForm.astro";
+import ConfirmDelete from "../../../../components/admin/ConfirmDelete.astro";
+import Notice from "../../../../components/admin/Notice.astro";
+import { btnGhost } from "../../../../components/admin/styles";
+import {
+  deleteBundle,
+  describeWriteError,
+  getBundle,
+  listShopItems,
+  updateBundle,
+} from "../../../../data/admin";
+import {
+  parseBundleForm,
+  type FieldErrors,
+  type FormValues,
+} from "../../../../lib/admin-forms";
+import { withBase } from "../../../../lib/url";
+
+// Fail closed if the middleware guard is ever bypassed.
+if (!Astro.locals.admin) return Astro.redirect(withBase("/login"));
+
+const id = Astro.params.id!;
+const [bundle, items] = await Promise.all([getBundle(id), listShopItems()]);
+if (!bundle) return Astro.rewrite("/404");
+
+let values: FormValues = {
+  id: bundle.id,
+  name: bundle.name,
+  description: bundle.description,
+  price: String(bundle.price),
+  available: bundle.available ? "on" : "",
+  sortOrder: String(bundle.sortOrder),
+  itemIds: bundle.itemIds.join(","),
+};
+let errors: FieldErrors = {};
+let formError: string | undefined;
+
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  if (form.get("intent") === "delete") {
+    try {
+      await deleteBundle(id);
+      const query = new URLSearchParams({ done: "deleted", name: bundle.name });
+      return Astro.redirect(withBase(`/admin/site?${query}#bundles`));
+    } catch (error) {
+      formError = describeWriteError(error);
+      if (!formError) throw error;
+    }
+  } else {
+    // The id is fixed once created.
+    form.set("id", id);
+    const parsed = parseBundleForm(form, items);
+    values = parsed.values;
+    if (!parsed.ok) {
+      errors = parsed.errors;
+    } else {
+      try {
+        await updateBundle(id, parsed.data);
+        const query = new URLSearchParams({
+          done: "saved",
+          name: parsed.data.name,
+        });
+        return Astro.redirect(withBase(`/admin/site?${query}#bundles`));
+      } catch (error) {
+        formError = describeWriteError(error);
+        if (!formError) throw error;
+      }
+    }
+  }
+}
+---
+
+<AdminLayout title={`Edit "${bundle.name}"`}>
+  <a href={withBase("/admin/site#bundles")} class={btnGhost}>&larr; BUNDLES</a>
+  <h1 class="mt-6 text-2xl font-extrabold tracking-tight text-ink">
+    <span class="text-acid">$</span> bundle edit {bundle.id}
+  </h1>
+  <p class="mt-1 text-sm text-ink-dim">
+    Sold {bundle.purchases}
+    {bundle.purchases === 1 ? "time" : "times"}. Changes only affect new
+    purchases.
+  </p>
+  <TerminalWindow title={`~/shop/bundles/${bundle.id}.bundle`} class="mt-6">
+    <BundleForm
+      mode="edit"
+      values={values}
+      items={items}
+      errors={errors}
+      formError={formError}
+    />
+  </TerminalWindow>
+  <section aria-labelledby="danger-heading" class="mt-8">
+    <h2
+      id="danger-heading"
+      class="mb-3 text-[11px] font-bold uppercase tracking-[0.2em] text-ink-faint"
+    >
+      danger zone
+    </h2>
+    {
+      bundle.purchases > 0 ? (
+        <Notice tone="error">
+          Players bought this bundle, so it can't be deleted. Untick "for sale"
+          to retire it instead.
+        </Notice>
+      ) : (
+        <ConfirmDelete
+          subject={`bundle "${bundle.name}"`}
+          label="delete bundle"
+        />
+      )
+    }
+  </section>
+</AdminLayout>

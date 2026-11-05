@@ -4,9 +4,28 @@ import TerminalWindow from "../components/TerminalWindow.astro";
 import StatCard from "../components/StatCard.astro";
 import RulesSection from "../components/RulesSection.astro";
 import RuleItem from "../components/RuleItem.astro";
+import {
+  MARKET_CRATE_ONLY_RANGE,
+  MARKET_LISTING_DAYS,
+  BOUNTY_DAYS,
+  BOUNTY_OPEN_LIMIT,
+  BOUNTY_REWARD_RANGE,
+  DEAL_DISCOUNT_PERCENT,
+  GIFT_WRAP_FEE,
+  RAFFLE_MAX_TICKETS,
+  RAFFLE_TICKET_PRICE,
+  RARITIES,
+  RENAME_TOKEN_PRICE,
+  cratesOnSale,
+} from "../data/coin-rules";
+import { RARITY_INFO, formatChance } from "../lib/coin-ui";
+import { SKILL_PATHS, SKILL_PRICES, pathCost } from "../data/skill-trees";
+import { SKILL_ACCENT_CLASS } from "../lib/skill-ui";
 import { withBase } from "../lib/url";
 
-const { getGameRules } = await Astro.locals.getQueries();
+// Seasonal eggs are only listed while they're on sale.
+const crates = cratesOnSale(Date.now());
+const { getGameRules, features } = await Astro.locals.getQueries();
 const rules = getGameRules();
 
 const pts = (n: number) => `${n} ${n === 1 ? "point" : "points"}`;
@@ -42,6 +61,10 @@ const contents: ContentsItem[] = [
   { id: "peoples-choice", label: "people's choice" },
   { id: "predictions", label: "predictions" },
   { id: "results-night", label: "results night" },
+  { id: "clim-coin", label: "clim coin" },
+  ...(features.skill_trees
+    ? [{ id: "skill-trees", label: "skill trees" }]
+    : []),
   { id: "account", label: "your account" },
   { id: "the-prize", label: "the prize" },
 ];
@@ -140,11 +163,11 @@ const bonusRows: BonusRow[] = [
       </p>
     </header>
 
-    <div class="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-[1.5fr_1fr]">
       <!-- Contents -->
       <nav aria-label="Rules contents">
         <TerminalWindow title="~/rules/README.md" meta="ls -1">
-          <ol class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+          <ol class="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
             {
               contents.map((item, i) => (
                 <li>
@@ -285,9 +308,10 @@ const bonusRows: BonusRow[] = [
             photos need exporting as JPEG first.
           </RuleItem>
           <RuleItem>
-            You can <span class="text-ink">withdraw</span> an entry (freeing the slot)
-            until the deadline, but you can't edit one. On team tasks any squad member
-            can submit or withdraw the squad's entries.
+            Until the deadline you can <span class="text-ink">edit</span> a text entry
+            or photo caption, or <span class="text-ink">withdraw</span> an entry (freeing
+            the slot). To swap a photo, withdraw it and upload another. On team tasks
+            any squad member can submit, edit or withdraw the squad's entries.
           </RuleItem>
           <RuleItem>
             Entries are private — only you (or your squad) and the Taskmaster
@@ -378,8 +402,8 @@ const bonusRows: BonusRow[] = [
         {
           /* Stacks into cards on phones; explicit roles keep the table semantics
             when the display type changes. */
-          /* eslint-disable astro/jsx-a11y/no-redundant-roles, astro/jsx-a11y/no-interactive-element-to-noninteractive-role */
         }
+        {/* biome-ignore-start lint/a11y/noRedundantRoles: explicit roles survive the display change */}
         <table
           role="table"
           class="mt-4 block w-full text-left text-sm sm:table"
@@ -441,6 +465,7 @@ const bonusRows: BonusRow[] = [
             }
           </tbody>
         </table>
+        {/* biome-ignore-end lint/a11y/noRedundantRoles: explicit roles survive the display change */}
         {
           /* eslint-enable astro/jsx-a11y/no-redundant-roles, astro/jsx-a11y/no-interactive-element-to-noninteractive-role */
         }
@@ -553,6 +578,316 @@ const bonusRows: BonusRow[] = [
       </RulesSection>
 
       <RulesSection
+        id="clim-coin"
+        command="rules --clim-coin"
+        title="Clim Coin"
+        file="~/rules/clim-coin.md"
+        meta="per season"
+      >
+        <ul class="space-y-3">
+          <RuleItem accent="amber">
+            Clim Coin is the season's currency. Every player starts each season
+            with an empty wallet; coins don't carry over.
+          </RuleItem>
+          <RuleItem>
+            <span class="font-bold text-ink">Placing pays</span> once a week's results
+            are out: 1st {rules.coins.placement.first}, 2nd {
+              rules.coins.placement.second
+            }, 3rd {rules.coins.placement.third}, and {
+              rules.coins.placement.scored
+            } for everyone else who was scored.
+          </RuleItem>
+          <RuleItem>
+            <span class="font-bold text-ink">Taking part pays</span> once it locks
+            in: {rules.coins.entry} for entering a week (at its deadline),
+            {rules.coins.prediction} for calling a winner (at the deadline), {
+              rules.coins.peoplesChoiceVote
+            } for a People's Choice vote (when voting closes) and {
+              rules.coins.pollVote
+            } for each poll you vote in (when it closes). The Taskmaster can also
+            grant or take coins.
+          </RuleItem>
+          <RuleItem>
+            Spend coins in the <a href={withBase("/shop")} class={link}>shop</a> on
+            pets (one can follow you around the site), avatars, avatar frames, titles,
+            name colours, shell prompts (shown on your profile and your entries) and
+            profile themes. Everyone can see what you wear; your balance and inventory
+            stay private in the wallet on your <a
+              href={withBase("/account#wallet")}
+              class={link}>profile</a
+            >. Some stock is <span class="font-bold text-ink">limited time</span
+            >: it shows when it leaves, and after that it's gone. Some is <span
+              class="font-bold text-ink">limited stock</span
+            >: only so many are sold each season, first come first served.
+          </RuleItem>
+          <RuleItem accent="amber">
+            <span class="font-bold text-ink">Gifting</span>: send coins to any
+            other player in your season from your wallet, up to {
+              rules.coins.giftWeeklyCap
+            } in any 7 days, with an optional note. They can't be taken back.
+          </RuleItem>
+          {
+            features.marketplace && (
+              <RuleItem accent="cyan">
+                <span class="font-bold text-ink">The marketplace</span>: sell
+                pets, avatars, cosmetics, egg exclusives and unused power-ups
+                (including the Taskmaster's Hint, but not passive ones like
+                Shield, Mirror or Insurance) to other players on the{" "}
+                <a href={withBase("/market")} class={link}>
+                  market
+                </a>
+                . You set the price, between half and three times the shop price
+                ({MARKET_CRATE_ONLY_RANGE.min}–{MARKET_CRATE_ONLY_RANGE.max} for
+                egg exclusives). Buyers pay the price or offer less; an offer's
+                coins are held until the seller answers, the buyer withdraws or
+                the listing ends. A listed item can't be worn or used, and
+                listings expire after {MARKET_LISTING_DAYS} days. You can't buy
+                something you already have (or a second charge of a power-up),
+                there's no fee, and sales are final. Skill tree rewards stay
+                with you.
+              </RuleItem>
+            )
+          }
+          {
+            features.bounties && (
+              <RuleItem accent="magenta">
+                <span class="font-bold text-ink">Bounties</span>: put up{" "}
+                {BOUNTY_REWARD_RANGE.min}–{BOUNTY_REWARD_RANGE.max} Clim Coin for
+                a challenge on the{" "}
+                <a href={withBase("/bounties")} class={link}>
+                  bounty board
+                </a>
+                . Other players claim it and you pick the winner, who gets the
+                coins. The reward is held from your wallet while it's open; you
+                can take it down until someone claims it, and anything unawarded
+                after {BOUNTY_DAYS} days lapses and the coins come back. Up to{" "}
+                {BOUNTY_OPEN_LIMIT} open at once, and you can't claim your own.
+              </RuleItem>
+            )
+          }
+          {
+            features.shop_eggs && (
+              <RuleItem accent="cyan">
+                <span class="font-bold text-ink">Mystery eggs</span> crack open
+                to hatch a random pet, avatar or cosmetic you don't own yet.
+                Rarity follows the shop price: Common up to 7, Rare 8–14, Epic
+                15–19, Legendary 20+.
+                {crates
+                  .map(
+                    (crate) =>
+                      `${crate.name} (${crate.price} coins): ${RARITIES.filter(
+                        (r) => crate.odds[r],
+                      )
+                        .map(
+                          (r) =>
+                            `${RARITY_INFO[r].label} ${formatChance(crate.odds[r] ?? 0)}`,
+                        )
+                        .join(", ")}${
+                        crate.powerUpChance
+                          ? `, plus a ${formatChance(crate.powerUpChance)} power-up chance`
+                          : ""
+                      }.`,
+                  )
+                  .join(" ")}{" "}
+                If a tier has nothing left for you, its chance is shared among
+                the others; the shop shows your exact odds for every item.
+                <span class="font-bold text-ink">Power-ups</span> are rare
+                finds: one comes out instead of the usual prize, only ever one
+                you haven't had this season, and it counts as that power-up's
+                one for the season. That chance never grows, and an egg with
+                only power-ups left in it for you can't be cracked. Some items
+                are egg exclusives and can't be bought.{" "}
+                <span class="font-bold text-ink">Seasonal eggs</span>
+                (like the Haunted Egg at Halloween) are only on sale for a short
+                while and hatch only their own exclusives, which no other egg
+                drops.
+              </RuleItem>
+            )
+          }
+          <RuleItem accent="magenta">
+            <span class="font-bold text-ink">Power-ups</span> are
+            <span class="font-bold text-ink">single use</span>: you can buy{
+              features.shop_eggs ? " (or hatch)" : ""
+            } each one
+            <span class="font-bold text-ink">once a season</span> and use it from
+            your wallet on the live week, one power-up per week. They're public the
+            moment you use them:
+            <span class="mt-2 block space-y-1">
+              <span class="block">
+                <span class="text-amber">★ Golden Week</span>: your task score ×{
+                  rules.coins.goldenWeekMultiplier
+                }, rounded up, before positions are decided (on team tasks, only
+                your own points).
+              </span>
+              <span class="block">
+                <span class="text-cyan">×2 Double Down</span>: a correct winner
+                call pays +{rules.coins.doubleDownPoints} instead of +{
+                  rules.predictionBonusPoints
+                }. Call first.
+              </span>
+              <span class="block">
+                <span class="text-acid">? Taskmaster's Hint</span>: a private
+                hint about the week's task, if the Taskmaster left one.
+              </span>
+              <span class="block">
+                <span class="text-danger">☠ Sabotage</span>: take {
+                  rules.coins.sabotagePoints
+                } points from any other player that week (squad-mates included). Each
+                player can only be sabotaged (or robbed) once a week.
+              </span>
+              <span class="block">
+                <span class="text-amber">$→ Heist</span>: steal {
+                  rules.coins.heistPoints
+                } points from another player that week: they lose them and you gain
+                them. It shares Sabotage's limit, and Shields and Mirrors work on it
+                the same way (a bounced Heist takes the points from you instead).
+              </span>
+              <span class="block">
+                <span class="text-cyan">❄ Freeze</span>: pick a player who hasn't
+                used a power-up yet that week; they can't use one for the rest of
+                it. Shields and Mirrors don't stop it.
+              </span>
+              <span class="block">
+                <span class="text-acid">◎ Spyglass</span>: privately see whether
+                another player holds an unspent Shield or Mirror right now.
+                Everyone sees who you looked at, but only you see the answer.
+              </span>
+              <span class="block">
+                <span class="text-amber">¢×2 Coin Rush</span>: every coin that week
+                pays you (placement, entry, winner call and People's Choice vote)
+                is multiplied by {rules.coins.coinRushMultiplier}.
+              </span>
+              <span class="block">
+                <span class="text-magenta">⧉ Copycat</span>: copy a power-up
+                someone else used the week before, and get its effect this week
+                (pick your own target if it needs one). It can't copy Copycat.
+              </span>
+            </span>
+          </RuleItem>
+          <RuleItem accent="cyan">
+            <span class="font-bold text-ink">Passive power-ups</span> work by themselves
+            once bought (still once a season each) and don't use your weekly power-up:
+            <span class="mt-2 block space-y-1">
+              <span class="block">
+                <span class="text-cyan">◈ Shield</span>: blocks the next
+                Sabotage against you.
+              </span>
+              <span class="block">
+                <span class="text-magenta">⇄ Mirror</span>: bounces the next
+                Sabotage against you back onto the saboteur. If you hold both,
+                the Mirror goes first.
+              </span>
+              <span class="block">
+                <span class="text-acid">✚ Insurance</span>: the first week you
+                finish last (from the next deadline after you buy it), you're
+                paid 3rd-place coins ({rules.coins.placement.third}) instead of {
+                  rules.coins.placement.scored
+                }.
+              </span>
+              <span class="block">
+                <span class="text-gold">✪ Bounty Badge</span>: the next bounty
+                you win after buying it pays {rules.coins.bountyBadgePercent}% extra
+                (rounded up), on the house.
+              </span>
+              <span class="block">
+                <span class="text-acid">↑ Underdog</span>: finish in the bottom
+                half two published weeks in a row (from the next deadline after you
+                buy it) and you get +{rules.coins.underdogPoints} points on the week
+                after.
+              </span>
+            </span>
+            Shields and Mirrors are secret: a Sabotage or Heist on you counts as
+            normal until that week's results are out, then the twist is revealed. A
+            bounced one can't be blocked or bounced again.
+          </RuleItem>
+          <RuleItem accent="magenta">
+            <span class="font-bold text-ink">
+              <span class="text-magenta">✧</span> One Wish Willow</span
+            >: make one wish to the Taskmaster from your wallet, any time (once
+            a season, and it doesn't use your weekly power-up). Keep it within
+            reason: they grant it or decline it entirely at their discretion,
+            and either way the wish is spent. Only you and the Taskmaster see
+            it.
+          </RuleItem>
+          <RuleItem accent="amber">
+            <span class="font-bold text-ink">Shop extras</span>:{" "}
+            {features.shop_deals &&
+              `one item each week is the deal of the week, ${DEAL_DISCOUNT_PERCENT}% off (or whatever the Taskmaster picks), Monday to Monday. `}
+            {features.shop_bundles &&
+              "Bundles sell several items for one price, if you haven't had any of them. "}
+            Rename tokens ({RENAME_TOKEN_PRICE} coins, buy as many as you like)
+            give one of your pets a custom name.
+            {features.shop_gift_wrap &&
+              ` Gift wrap buys a pet, avatar or cosmetic for someone else in your season who doesn't have it, for its price plus ${GIFT_WRAP_FEE} coins, with an optional note and anonymous sender.`}
+            {features.shop_raffle &&
+              ` The weekly raffle sells up to ${RAFFLE_MAX_TICKETS} tickets each (${RAFFLE_TICKET_PRICE} coins a ticket) on the live week; when its deadline passes, one ticket wins the whole pot.`}
+          </RuleItem>
+          <RuleItem>
+            If a result is corrected after you've spent, your balance can dip
+            below zero; earn it back before buying again.
+          </RuleItem>
+        </ul>
+      </RulesSection>
+
+      {
+        features.skill_trees && (
+          <RulesSection
+            id="skill-trees"
+            command="rules --skill-trees"
+            title="Skill trees"
+            file="~/rules/skill-trees.md"
+            meta="per season"
+          >
+            <ul class="space-y-3">
+              <RuleItem accent="amber">
+                Commit to <span class="font-bold text-ink">one pathway</span> a
+                season on the{" "}
+                <a href={withBase("/skills")} class={link}>
+                  skill trees
+                </a>{" "}
+                page and unlock its skills with Clim Coin. Unlocking any
+                pathway's root commits you to it; there's no switching until the
+                next season.
+              </RuleItem>
+              <RuleItem>
+                Each tree has a root ({SKILL_PRICES.root} coins) and two
+                branches ({SKILL_PRICES.branch} each, root first). Each branch
+                grows a spur ({SKILL_PRICES.spur}), then a tip
+                ({SKILL_PRICES.tip}), and the capstone
+                ({SKILL_PRICES.capstone}) needs both branches:{" "}
+                {pathCost(SKILL_PATHS[0])} coins for the lot.
+              </RuleItem>
+              <RuleItem accent="cyan">
+                Perks only ever touch Clim Coin:{" "}
+                <span class="font-bold text-ink">never leaderboard points</span>
+                . Earning perks pay on coins that land after you unlock them,
+                not on past weeks, and discounts apply from your next purchase.
+                Titles and name colours from a tree are yours to equip in your
+                wallet and can't be bought in the shop.
+              </RuleItem>
+              <RuleItem>
+                <span class="mt-1 block space-y-1">
+                  {SKILL_PATHS.map((path) => (
+                    <span class="block">
+                      <span
+                        class:list={[
+                          "font-bold",
+                          SKILL_ACCENT_CLASS[path.accent].text,
+                        ]}
+                      >
+                        {path.name}
+                      </span>
+                      : {path.description}
+                    </span>
+                  ))}
+                </span>
+              </RuleItem>
+            </ul>
+          </RulesSection>
+        )
+      }
+
+      <RulesSection
         id="account"
         command="rules --account"
         title="Your account"
@@ -570,7 +905,7 @@ const bonusRows: BonusRow[] = [
             predictions, vote for People's Choice and react.
           </RuleItem>
           <RuleItem>
-            Edit your bio and avatar from your profile. The bell in the navbar
+            Edit your bio from your profile. The bell in the navbar
             tells you about new tasks and polls, deadline reminders, results,
             rank climbs and bonuses.
           </RuleItem>

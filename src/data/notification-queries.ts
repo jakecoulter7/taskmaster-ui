@@ -4,10 +4,22 @@ import type {
   NotificationItem,
   NotificationKind,
   PlayerRankChange,
+  PowerUpFeedEntry,
   Task,
 } from "../types";
 import { withBase } from "../lib/url";
 import { ukDateFormat } from "../lib/time";
+import {
+  HEIST_POINTS,
+  SABOTAGE_POINTS,
+  appliedEffect,
+  getCrate,
+} from "./coin-rules";
+
+/** "Sabotage" or "Heist", for a use that attacked someone's points. */
+const attackLabel = (use: PowerUpFeedEntry) =>
+  appliedEffect(use) === "heist" ? "Heist" : "Sabotage";
+import { listingExpiry, listingStatus } from "./market-mappers";
 
 const weekLabel = (weekNumber: number) =>
   `Week ${String(weekNumber).padStart(2, "0")}`;
@@ -42,6 +54,10 @@ type FeedEvent = Omit<NotificationItem, "unread"> & { time: number };
 
 interface NotificationDeps {
   getPlayerRankHistory: (playerId: string) => PlayerRankChange[];
+  /** Sabotages that hit a player (Clim Coin power-ups). */
+  getSabotagesOf?: (playerId: string) => PowerUpFeedEntry[];
+  /** Sabotages a player used. */
+  getSabotagesBy?: (playerId: string) => PowerUpFeedEntry[];
 }
 
 /**
@@ -54,10 +70,15 @@ interface NotificationDeps {
  */
 export function createNotificationQueries(
   data: CompetitionData,
-  { getPlayerRankHistory }: NotificationDeps,
+  {
+    getPlayerRankHistory,
+    getSabotagesOf = () => [],
+    getSabotagesBy = () => [],
+  }: NotificationDeps,
 ) {
-  const { tasks, polls, scores, bonusPoints, resultsPostedAt } = data;
+  const { tasks, polls, scores, bonusPoints, resultsPostedAt, players } = data;
   const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const playerName = new Map(players.map((p) => [p.id, p.name]));
 
   // Locked tasks are only ever named by their week.
   const taskName = (task: Task) =>
@@ -189,6 +210,405 @@ export function createNotificationQueries(
         })
       : [];
 
+    const sabotages: FeedEvent[] = playerId
+      ? getSabotagesOf(playerId).flatMap((use) => {
+          const time = new Date(use.at).getTime();
+          if (Number.isNaN(time) || time > now) return [];
+          const task = taskById.get(use.taskId);
+          const kind: NotificationKind = "sabotaged";
+          const effect = appliedEffect(use);
+          const missed =
+            use.outcome === "blocked" || use.outcome === "reflected";
+          return [
+            {
+              id: `sabotage:${use.id}`,
+              kind,
+              title:
+                effect === "freeze"
+                  ? `${use.player.name} froze you`
+                  : effect === "heist"
+                    ? `${use.player.name} pulled a Heist on you`
+                    : `${use.player.name} sabotaged you`,
+              detail: [
+                // Once results are out, a Shield or Mirror shows it missed.
+                effect === "freeze"
+                  ? "no power-ups for you this week"
+                  : missed
+                    ? "no points lost"
+                    : effect === "heist"
+                      ? `${plural(HEIST_POINTS, "point")} stolen`
+                      : `${plural(-SABOTAGE_POINTS, "point")} lost`,
+                ...(task ? [weekLabel(task.weekNumber)] : []),
+              ].join(" · "),
+              href: withBase(
+                task ? `/tasks/${task.id}#power-ups` : `/players/${playerId}`,
+              ),
+              at: use.at,
+              time,
+            },
+          ];
+        })
+      : [];
+
+    // Shields and Mirrors are revealed with the week's results.
+    const revealedAt = (use: PowerUpFeedEntry) => {
+      const at = resultsPostedAt[use.taskId];
+      const time = at ? new Date(at).getTime() : Number.NaN;
+      return Number.isNaN(time) || time > now ? undefined : { at, time };
+    };
+    const defended: FeedEvent[] = playerId
+      ? [
+          ...getSabotagesOf(playerId).flatMap((use): FeedEvent[] => {
+            const shown = revealedAt(use);
+            if (!shown || !use.outcome || use.outcome === "hit") return [];
+            const task = taskById.get(use.taskId);
+            return [
+              {
+                id: `defended:${use.id}`,
+                kind: "shielded",
+                title:
+                  use.outcome === "blocked"
+                    ? `Your Shield blocked ${use.player.name}'s ${attackLabel(use)}`
+                    : `Your Mirror bounced ${use.player.name}'s ${attackLabel(use)} back`,
+                detail: [
+                  "no points lost",
+                  ...(task ? [weekLabel(task.weekNumber)] : []),
+                ].join(" · "),
+                href: withBase(`/tasks/${use.taskId}#power-ups`),
+                ...shown,
+              },
+            ];
+          }),
+          ...getSabotagesBy(playerId).flatMap((use): FeedEvent[] => {
+            const shown = revealedAt(use);
+            if (!shown || use.outcome !== "reflected") return [];
+            const task = taskById.get(use.taskId);
+            return [
+              {
+                id: `reflected:${use.id}`,
+                kind: "reflected",
+                title: `Your ${attackLabel(use)} bounced off ${use.target?.name ?? "your target"}'s Mirror`,
+                detail: [
+                  `${plural(
+                    appliedEffect(use) === "heist"
+                      ? HEIST_POINTS
+                      : -SABOTAGE_POINTS,
+                    "point",
+                  )} lost`,
+                  ...(task ? [weekLabel(task.weekNumber)] : []),
+                ].join(" · "),
+                href: withBase(`/tasks/${use.taskId}#power-ups`),
+                ...shown,
+              },
+            ];
+          }),
+        ]
+      : [];
+
+    const gifts: FeedEvent[] = playerId
+      ? data.coins.gifts.flatMap((gift): FeedEvent[] => {
+          if (gift.toPlayerId !== playerId) return [];
+          const time = new Date(gift.at).getTime();
+          if (Number.isNaN(time) || time > now) return [];
+          return [
+            {
+              id: `gift:${gift.id}`,
+              kind: "gift-received",
+              title: `${playerName.get(gift.fromPlayerId) ?? "Someone"} sent you ${gift.amount} Clim Coin`,
+              ...(gift.message && { detail: `"${gift.message}"` }),
+              href: withBase("/account#history"),
+              at: gift.at,
+              time,
+            },
+          ];
+        })
+      : [];
+
+    // Coins, items and eggs an admin gave the player (deductions aren't gifts).
+    const itemNames = new Map(data.coins.items.map((i) => [i.id, i.name]));
+
+    // Gift-wrapped items, and weekly raffles the player won.
+    const extras: FeedEvent[] = playerId
+      ? [
+          ...data.coins.wrappedGifts.flatMap((gift): FeedEvent[] => {
+            if (gift.toPlayerId !== playerId) return [];
+            const time = new Date(gift.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            const from = gift.anonymous
+              ? "A secret admirer"
+              : (playerName.get(gift.fromPlayerId) ?? "Someone");
+            return [
+              {
+                id: `wrapped:${gift.id}`,
+                kind: "gift-received",
+                title: `${from} gift-wrapped you ${itemNames.get(gift.itemId) ?? "something"}`,
+                ...(gift.message && { detail: `"${gift.message}"` }),
+                href: withBase("/account#inventory"),
+                at: gift.at,
+                time,
+              },
+            ];
+          }),
+          ...data.coins.raffle.draws.flatMap((draw): FeedEvent[] => {
+            if (draw.winnerId !== playerId) return [];
+            const time = new Date(draw.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            const task = taskById.get(draw.taskId);
+            return [
+              {
+                id: `raffle:${draw.taskId}`,
+                kind: "gift-received",
+                title: `You won the ${task ? `${weekLabel(task.weekNumber)} ` : ""}raffle`,
+                detail: `${draw.pot} Clim Coin pot · ${plural(draw.tickets, "ticket")} in the draw`,
+                href: withBase("/account#history"),
+                at: draw.at,
+                time,
+              },
+            ];
+          }),
+        ]
+      : [];
+    // A player claims their daily bonus themselves, so its gifts aren't news.
+    const dailyItemGifts = new Set(
+      data.coins.dailyBonusClaims.map((c) => c.itemGiftId),
+    );
+    const dailyEggGifts = new Set(
+      data.coins.dailyBonusClaims.map((c) => c.eggGiftId),
+    );
+    const adminGifts: FeedEvent[] = playerId
+      ? [
+          ...data.coins.adjustments.flatMap((grant): FeedEvent[] => {
+            if (grant.playerId !== playerId || grant.amount <= 0) return [];
+            const time = new Date(grant.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            return [
+              {
+                id: `coin-grant:${grant.id}`,
+                kind: "gift-received",
+                title: `You were gifted ${grant.amount} Clim Coin`,
+                detail: grant.reason,
+                href: withBase("/account#history"),
+                at: grant.at,
+                time,
+              },
+            ];
+          }),
+          ...data.coins.itemGifts.flatMap((gift): FeedEvent[] => {
+            if (gift.playerId !== playerId || dailyItemGifts.has(gift.id)) {
+              return [];
+            }
+            const time = new Date(gift.at).getTime();
+            if (Number.isNaN(time) || time > now) return [];
+            return [
+              {
+                id: `item-gift:${gift.id}`,
+                kind: "gift-received",
+                title: `You were gifted ${itemNames.get(gift.itemId) ?? "an item"}`,
+                detail: gift.reason,
+                href: withBase("/account#inventory"),
+                at: gift.at,
+                time,
+              },
+            ];
+          }),
+          // Gifted eggs wait in the inventory, so only while eggs are on.
+          ...(data.features.shop_eggs ? data.coins.eggGifts : []).flatMap(
+            (gift): FeedEvent[] => {
+              if (gift.playerId !== playerId || dailyEggGifts.has(gift.id)) {
+                return [];
+              }
+              const time = new Date(gift.at).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `egg-gift:${gift.id}`,
+                  kind: "gift-received",
+                  title: `You were gifted a ${getCrate(gift.crateId)?.name ?? "mystery egg"}`,
+                  detail: gift.reason,
+                  href: withBase("/account#inventory"),
+                  at: gift.at,
+                  time,
+                },
+              ];
+            },
+          ),
+        ]
+      : [];
+
+    // Mini-tasks an admin ticked off for the player, with what they paid.
+    const miniTasks = new Map(data.coins.miniTasks.map((t) => [t.id, t]));
+    const miniTaskDone: FeedEvent[] = playerId
+      ? data.coins.miniTaskCompletions.flatMap((done): FeedEvent[] => {
+          const miniTask = miniTasks.get(done.miniTaskId);
+          if (done.playerId !== playerId || !miniTask) return [];
+          const time = new Date(done.at).getTime();
+          if (Number.isNaN(time) || time > now) return [];
+          return [
+            {
+              id: `mini-task:${done.miniTaskId}`,
+              kind: "mini-task",
+              title: `Mini-task done: +${miniTask.reward} Clim Coin`,
+              detail: miniTask.title,
+              href: withBase("/account#mini-tasks"),
+              at: done.at,
+              time,
+            },
+          ];
+        })
+      : [];
+
+    // The Taskmaster's answer to a wish (private to the player).
+    const wishes: FeedEvent[] = playerId
+      ? data.coins.wishes.flatMap((wish): FeedEvent[] => {
+          if (wish.playerId !== playerId || !wish.decidedAt) return [];
+          if (wish.status === "pending") return [];
+          const time = new Date(wish.decidedAt).getTime();
+          if (Number.isNaN(time) || time > now) return [];
+          const granted = wish.status === "granted";
+          return [
+            {
+              id: `wish:${wish.id}`,
+              kind: granted ? "wish-granted" : "wish-declined",
+              title: granted
+                ? "The Taskmaster granted your wish"
+                : "The Taskmaster declined your wish",
+              detail: wish.response ?? `"${wish.wish}"`,
+              href: withBase("/account#wish"),
+              at: wish.decidedAt,
+              time,
+            },
+          ];
+        })
+      : [];
+
+    // The marketplace: offers on the player's listings, their sales, how
+    // their own offers went and listings that lapsed unsold.
+    const market = data.coins.market;
+    const listings = new Map(market.listings.map((l) => [l.id, l]));
+    const itemOf = (itemId: string) => itemNames.get(itemId) ?? "an item";
+    const listingHref = (id: number) => withBase(`/market/${id}`);
+    const marketEvents: FeedEvent[] =
+      playerId && data.features.marketplace
+        ? [
+            ...market.offers.flatMap((offer): FeedEvent[] => {
+              const listing = listings.get(offer.listingId);
+              if (!listing) return [];
+              if (listing.sellerId === playerId) {
+                const time = new Date(offer.at).getTime();
+                if (Number.isNaN(time) || time > now) return [];
+                return [
+                  {
+                    id: `market-offer:${offer.id}:${offer.at}`,
+                    kind: "market-offer",
+                    title: `${playerName.get(offer.buyerId) ?? "Someone"} offered ${offer.amount} Clim Coin for your ${itemOf(listing.itemId)}`,
+                    detail: `listed at ${listing.price}`,
+                    href: listingHref(listing.id),
+                    at: offer.at,
+                    time,
+                  },
+                ];
+              }
+              if (offer.buyerId !== playerId || !offer.decidedAt) return [];
+              if (offer.status !== "accepted" && offer.status !== "declined") {
+                return [];
+              }
+              const time = new Date(offer.decidedAt).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              const accepted = offer.status === "accepted";
+              return [
+                {
+                  id: `market-offer-decided:${offer.id}`,
+                  kind: accepted ? "offer-accepted" : "offer-declined",
+                  title: accepted
+                    ? `Your ${offer.amount} Clim Coin offer for ${itemOf(listing.itemId)} was accepted`
+                    : `Your offer for ${itemOf(listing.itemId)} was declined`,
+                  ...(!accepted && { detail: "your coins are free again" }),
+                  href: listingHref(listing.id),
+                  at: offer.decidedAt,
+                  time,
+                },
+              ];
+            }),
+            ...market.sales.flatMap((sale): FeedEvent[] => {
+              if (sale.sellerId !== playerId) return [];
+              const time = new Date(sale.at).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `market-sold:${sale.id}`,
+                  kind: "market-sold",
+                  title: `${playerName.get(sale.buyerId) ?? "Someone"} bought your ${itemOf(sale.itemId)} for ${sale.price} Clim Coin`,
+                  href: listingHref(sale.listingId),
+                  at: sale.at,
+                  time,
+                },
+              ];
+            }),
+            ...market.listings.flatMap((listing): FeedEvent[] => {
+              if (listing.sellerId !== playerId) return [];
+              if (listingStatus(listing, now) !== "expired") return [];
+              const time = listingExpiry(listing);
+              if (time > now) return [];
+              return [
+                {
+                  id: `listing-expired:${listing.id}`,
+                  kind: "listing-expired",
+                  title: `Your ${itemOf(listing.itemId)} listing expired unsold`,
+                  detail: "it's back in your inventory",
+                  href: withBase("/account/market"),
+                  at: new Date(time).toISOString(),
+                  time,
+                },
+              ];
+            }),
+          ]
+        : [];
+
+    // Bounties: claims on the player's open ones, and ones they won.
+    const bountyHref = (id: number) => withBase(`/bounties/${id}`);
+    const bountyById = new Map(
+      data.coins.bounties.bounties.map((b) => [b.id, b]),
+    );
+    const bountyEvents: FeedEvent[] =
+      playerId && data.features.bounties
+        ? [
+            ...data.coins.bounties.claims.flatMap((claim): FeedEvent[] => {
+              const bounty = bountyById.get(claim.bountyId);
+              if (bounty?.posterId !== playerId) return [];
+              const time = new Date(claim.at).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `bounty-claimed:${claim.id}`,
+                  kind: "bounty-claimed",
+                  title: `${playerName.get(claim.playerId) ?? "Someone"} claimed your bounty "${bounty.title}"`,
+                  detail: "pick a winner to pay it out",
+                  href: bountyHref(bounty.id),
+                  at: claim.at,
+                  time,
+                },
+              ];
+            }),
+            ...data.coins.bounties.bounties.flatMap((bounty): FeedEvent[] => {
+              if (bounty.status !== "awarded") return [];
+              if (bounty.winnerId !== playerId || !bounty.closedAt) return [];
+              const time = new Date(bounty.closedAt).getTime();
+              if (Number.isNaN(time) || time > now) return [];
+              return [
+                {
+                  id: `bounty-won:${bounty.id}`,
+                  kind: "bounty-won",
+                  title: `You won ${bounty.reward} Clim Coin for "${bounty.title}"`,
+                  detail: `${playerName.get(bounty.posterId) ?? "Someone"}'s bounty`,
+                  href: bountyHref(bounty.id),
+                  at: bounty.closedAt,
+                  time,
+                },
+              ];
+            }),
+          ]
+        : [];
+
     const opened: FeedEvent[] = polls.flatMap((poll) => {
       const time = new Date(poll.opensAt).getTime();
       if (!poll.published || Number.isNaN(time) || time > now) return [];
@@ -214,6 +634,15 @@ export function createNotificationQueries(
       ...climbs,
       ...results,
       ...adjustments,
+      ...sabotages,
+      ...extras,
+      ...defended,
+      ...gifts,
+      ...adminGifts,
+      ...miniTaskDone,
+      ...wishes,
+      ...marketEvents,
+      ...bountyEvents,
       ...opened,
     ];
   }

@@ -5,13 +5,15 @@ import Footer from "../components/Footer.astro";
 import CommandPalette from "../components/CommandPalette.astro";
 import EasterEggs from "../components/EasterEggs.astro";
 import WhatsNewBanner from "../components/WhatsNewBanner.astro";
+import WanderingPet from "../components/WanderingPet.astro";
+import StormMode from "../components/StormMode.astro";
 import { withBase } from "../lib/url";
 import { isSeasonPublic } from "../data/seasons";
 
 const [
-  { getCommandPaletteItems, getWhatsNew, getNotifications },
+  { getCommandPaletteItems, getWhatsNew, getNotifications, features },
   viewer,
-  { seasons },
+  { seasons, seasonOfPlayer },
 ] = await Promise.all([
   Astro.locals.getQueries(),
   Astro.locals.getViewer(),
@@ -26,6 +28,8 @@ interface Props {
   image?: string;
   /** Keep the page out of search engines (e.g. the admin panel). */
   noindex?: boolean;
+  /** Keep storm mode off this page (the admin area stays workable). */
+  calm?: boolean;
 }
 
 const SITE_NAME = "EAYL Taskmaster";
@@ -35,7 +39,10 @@ const {
   description = "16 weeks. 25 players. One winner. The EAYL Academy Taskmaster challenge.",
   image = "/og.png",
   noindex = false,
+  calm = false,
 } = Astro.props;
+
+const storm = features.storm_mode && !calm;
 
 // Page-specific titles read "<page> · EAYL Taskmaster"; the home page (no
 // title prop) just uses the site name on its own.
@@ -50,6 +57,21 @@ const paletteItems = getCommandPaletteItems({
   seasons: viewer?.isAdmin ? seasons : seasons.filter(isSeasonPublic),
 });
 const whatsNew = getWhatsNew();
+// A signed-in player's Clim Coin balance and equipped pet, from their own
+// season (their wallet is per season).
+const playerId = viewer?.playerId;
+const playerSeason = playerId ? seasonOfPlayer(playerId) : undefined;
+const playerCoins =
+  playerId && playerSeason
+    ? await Astro.locals.getQueries(playerSeason.id).then((q) => {
+        const loadout = q.getLoadout(playerId);
+        return {
+          balance: q.getWallet(playerId).balance,
+          pet: loadout.pet,
+          petName: loadout.petName ?? loadout.pet?.name,
+        };
+      })
+    : undefined;
 // Only players get notifications: their read marker lives on the account.
 const notifications = viewer?.playerId
   ? getNotifications({
@@ -60,7 +82,7 @@ const notifications = viewer?.playerId
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-storm={storm ? "" : undefined}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -69,7 +91,7 @@ const notifications = viewer?.playerId
       // Dark is the default when nothing valid is stored. The exotic CRT
       // phosphor themes (amber/cyan/magenta) are summoned from the command
       // palette but persist here like any other.
-      (function () {
+      (() => {
         const valid = ["dark", "light", "amber", "cyan", "magenta"];
         try {
           const saved = localStorage.getItem("eayl-theme");
@@ -117,7 +139,16 @@ const notifications = viewer?.playerId
       class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[70] focus:bg-acid focus:text-term-bg focus:px-3 focus:py-1 focus:font-bold"
       >Skip to content</a
     >
-    <Navbar viewer={viewer} notifications={notifications} />
+    <Navbar
+      viewer={viewer}
+      notifications={notifications}
+      coinBalance={playerCoins?.balance}
+      skillTrees={features.skill_trees}
+      achievements={features.achievements}
+      market={features.marketplace}
+      bounties={features.bounties}
+      pool={features.pool_bracket}
+    />
     <WhatsNewBanner info={whatsNew} />
     <main id="main" class="flex-1">
       <slot />
@@ -125,5 +156,14 @@ const notifications = viewer?.playerId
     <Footer />
     <CommandPalette items={paletteItems} />
     <EasterEggs />
+    {storm && <StormMode />}
+    {
+      playerCoins?.pet?.imageUrl && (
+        <WanderingPet
+          name={playerCoins.petName ?? playerCoins.pet.name}
+          imageUrl={playerCoins.pet.imageUrl}
+        />
+      )
+    }
   </body>
 </html>

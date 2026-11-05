@@ -10,12 +10,20 @@ import {
   parseAddEntryForm,
   parseBonusForm,
   parseChangelogForm,
+  parseCoinAdjustmentForm,
+  parseEggGiftForm,
+  parseItemGiftForm,
+  parseMiniTaskCompletionsForm,
+  parseMiniTaskForm,
+  parseWishDecisionForm,
+  parseFeatureFlagForm,
   parseNewPlayerForm,
   parsePlayerEmailForm,
   parsePlayerForm,
   parsePollForm,
   parseRecapForm,
   parseRowId,
+  parseShopItemForm,
   parseTaskForm,
   parseTaskScoresForm,
   parseTeamForm,
@@ -388,6 +396,7 @@ describe("parseTaskForm", () => {
       deadline: "2026-01-12 09:00:00",
       format: "individual",
       revealPassword: null,
+      hint: null,
       maxSubmissions: 0,
       submissionKinds: [],
     });
@@ -1438,5 +1447,321 @@ describe("pollBonusWeeks", () => {
       { id: "week-01", label: "week 01: Paper planes" },
       { id: "week-12", label: "week 12: Towers" },
     ]);
+  });
+});
+
+describe("parseShopItemForm", () => {
+  const pet = {
+    id: "rubber-duck",
+    name: "Rubber Duck",
+    description: "Quacks at bugs.",
+    category: "pet",
+    price: "25",
+    imageUrl: "/shop/pets/rubber-duck.svg",
+    available: "on",
+  };
+  const parse = (overrides: Record<string, string> = {}) =>
+    parseShopItemForm(formData({ ...pet, ...overrides }));
+
+  it("parses a pet and clears fields for other categories", () => {
+    expect(dataOf(parse({ powerUp: "hint", cosmeticValue: "x" }))).toEqual({
+      id: "rubber-duck",
+      name: "Rubber Duck",
+      description: "Quacks at bugs.",
+      category: "pet",
+      price: 25,
+      imageUrl: "/shop/pets/rubber-duck.svg",
+      cosmeticKind: null,
+      cosmeticValue: null,
+      powerUp: null,
+      available: true,
+      crateOnly: false,
+      crateId: null,
+      availableFrom: null,
+      availableUntil: null,
+      stock: null,
+      sortOrder: undefined,
+    });
+  });
+
+  it("parses stock per season, blank meaning unlimited", () => {
+    expect(dataOf(parse({ stock: "5" })).stock).toBe(5);
+    expect(dataOf(parse({ stock: "0" })).stock).toBe(0);
+    expect(errorsOf(parse({ stock: "-1" })).stock).toBe("Must be 0 or more.");
+    expect(errorsOf(parse({ stock: "2.5" })).stock).toBe(
+      "Enter a whole number.",
+    );
+    expect(errorsOf(parse({ stock: "3", crateOnly: "on" })).stock).toMatch(
+      /aren't sold in the shop/,
+    );
+  });
+
+  it("parses a sale window as UK wall-clock times", () => {
+    expect(
+      dataOf(
+        parse({
+          availableFrom: "2026-10-21T00:00",
+          availableUntil: "2026-10-31T23:59",
+        }),
+      ),
+    ).toMatchObject({
+      availableFrom: "2026-10-21 00:00:00",
+      availableUntil: "2026-10-31 23:59:00",
+    });
+    expect(
+      errorsOf(
+        parse({
+          availableFrom: "2026-10-31T00:00",
+          availableUntil: "2026-10-21T00:00",
+        }),
+      ).availableUntil,
+    ).toBe("The end must be after the start.");
+    expect(errorsOf(parse({ availableUntil: "soon" })).availableUntil).toBe(
+      "Enter a date and time.",
+    );
+  });
+
+  it("ties a seasonal egg's exclusive to that egg", () => {
+    expect(
+      dataOf(parse({ crateOnly: "on", crateId: "halloween-egg" })).crateId,
+    ).toBe("halloween-egg");
+    expect(errorsOf(parse({ crateId: "halloween-egg" })).crateId).toMatch(
+      /egg exclusive/,
+    );
+    // Regular eggs can't have exclusives of their own.
+    expect(
+      errorsOf(parse({ crateOnly: "on", crateId: "mystery-egg" })).crateId,
+    ).toBe("Pick one of the seasonal eggs.");
+  });
+
+  it("accepts the passive power-ups", () => {
+    const base = { category: "power_up", imageUrl: "" };
+    for (const powerUp of ["shield", "mirror", "insurance"]) {
+      expect(dataOf(parse({ ...base, powerUp })).powerUp).toBe(powerUp);
+    }
+  });
+
+  it("marks crate exclusives, but never a power-up", () => {
+    expect(dataOf(parse({ crateOnly: "on" })).crateOnly).toBe(true);
+    expect(
+      errorsOf(
+        parse({
+          crateOnly: "on",
+          category: "power_up",
+          powerUp: "hint",
+          imageUrl: "",
+        }),
+      ).crateOnly,
+    ).toBe("Power-ups can't be egg exclusives.");
+  });
+
+  it("reads an unticked box as retired", () => {
+    const form = formData({ ...pet });
+    form.delete("available");
+    expect(dataOf(parseShopItemForm(form)).available).toBe(false);
+  });
+
+  it("needs an image for pets and avatars", () => {
+    expect(errorsOf(parse({ imageUrl: "" })).imageUrl).toMatch(/image/);
+    expect(errorsOf(parse({ imageUrl: "ftp://x" })).imageUrl).toMatch(/https/);
+  });
+
+  it("rejects a negative or missing price", () => {
+    expect(errorsOf(parse({ price: "-1" })).price).toBeDefined();
+    expect(errorsOf(parse({ price: "" })).price).toBe("Required.");
+  });
+
+  it("needs a power-up's effect", () => {
+    const base = { category: "power_up", imageUrl: "" };
+    expect(errorsOf(parse(base)).powerUp).toBeDefined();
+    expect(dataOf(parse({ ...base, powerUp: "golden_week" })).powerUp).toBe(
+      "golden_week",
+    );
+  });
+
+  it("checks a cosmetic's value against its kind", () => {
+    const base = { category: "cosmetic", imageUrl: "" };
+    expect(errorsOf(parse(base)).cosmeticKind).toBeDefined();
+    expect(
+      errorsOf(
+        parse({ ...base, cosmeticKind: "name_colour", cosmeticValue: "red" }),
+      ).cosmeticValue,
+    ).toMatch(/acid/);
+    expect(
+      errorsOf(parse({ ...base, cosmeticKind: "theme", cosmeticValue: "" }))
+        .cosmeticValue,
+    ).toMatch(/phosphor/);
+    expect(
+      dataOf(
+        parse({ ...base, cosmeticKind: "title", cosmeticValue: "Legend" }),
+      ),
+    ).toMatchObject({ cosmeticKind: "title", cosmeticValue: "Legend" });
+  });
+});
+
+describe("parseCoinAdjustmentForm", () => {
+  it("parses a grant or deduction with a reason", () => {
+    expect(
+      dataOf(
+        parseCoinAdjustmentForm(formData({ amount: "-5", reason: "Fine" })),
+      ),
+    ).toEqual({ amount: -5, reason: "Fine" });
+  });
+
+  it("rejects zero and a missing reason", () => {
+    const errors = errorsOf(
+      parseCoinAdjustmentForm(formData({ amount: "0", reason: " " })),
+    );
+    expect(errors.amount).toBe("Use a non-zero amount.");
+    expect(errors.reason).toBe("Required.");
+  });
+});
+
+describe("parseItemGiftForm", () => {
+  it("parses the item and the note posted as giftReason", () => {
+    expect(
+      dataOf(
+        parseItemGiftForm(
+          formData({ itemId: " duck ", giftReason: " Well played " }),
+        ),
+      ),
+    ).toEqual({ itemId: "duck", reason: "Well played" });
+  });
+
+  it("requires an item and a reason", () => {
+    const errors = errorsOf(
+      parseItemGiftForm(formData({ itemId: "", giftReason: " " })),
+    );
+    expect(errors.itemId).toBe("Pick an item to gift.");
+    expect(errors.reason).toBe("Required.");
+  });
+});
+
+describe("parseEggGiftForm", () => {
+  it("parses a known egg and the note posted as eggReason", () => {
+    expect(
+      dataOf(
+        parseEggGiftForm(
+          formData({ crateId: " faberge-egg ", eggReason: " Star player " }),
+        ),
+      ),
+    ).toEqual({ crateId: "faberge-egg", reason: "Star player" });
+  });
+
+  it("requires a real egg and a reason", () => {
+    const errors = errorsOf(
+      parseEggGiftForm(formData({ crateId: "golden-egg", eggReason: "" })),
+    );
+    expect(errors.crateId).toBe("Pick an egg to gift.");
+    expect(errors.reason).toBe("Required.");
+  });
+});
+
+describe("parseWishDecisionForm", () => {
+  it("parses a decision with an optional reply", () => {
+    expect(
+      dataOf(
+        parseWishDecisionForm(
+          formData({ rowId: "3", decision: "granted", response: " Done! " }),
+        ),
+      ),
+    ).toEqual({ rowId: 3, decision: "granted", response: "Done!" });
+    expect(
+      dataOf(
+        parseWishDecisionForm(formData({ rowId: "3", decision: "declined" })),
+      ),
+    ).toEqual({ rowId: 3, decision: "declined", response: null });
+  });
+
+  it("rejects an unknown decision or wish, and a long reply", () => {
+    const errors = errorsOf(
+      parseWishDecisionForm(
+        formData({ rowId: "x", decision: "maybe", response: "y".repeat(201) }),
+      ),
+    );
+    expect(Object.keys(errors).sort()).toEqual([
+      "decision",
+      "response",
+      "rowId",
+    ]);
+  });
+});
+
+describe("parseFeatureFlagForm", () => {
+  it("parses a known flag turned on or off", () => {
+    expect(
+      parseFeatureFlagForm(formData({ key: "shop_eggs", enabled: "on" })),
+    ).toEqual({ key: "shop_eggs", enabled: true });
+    expect(
+      parseFeatureFlagForm(formData({ key: "shop_eggs", enabled: "off" })),
+    ).toEqual({ key: "shop_eggs", enabled: false });
+  });
+
+  it("rejects unknown flags and values", () => {
+    expect(
+      parseFeatureFlagForm(formData({ key: "nope", enabled: "on" })),
+    ).toBeUndefined();
+    expect(
+      parseFeatureFlagForm(formData({ key: "shop_eggs", enabled: "yes" })),
+    ).toBeUndefined();
+  });
+});
+
+describe("parseMiniTaskForm", () => {
+  const valid = {
+    title: "  Bring a plant  ",
+    description: "",
+    reward: "3",
+    startsOn: "2026-10-26",
+    endsOn: "2026-10-27",
+  };
+
+  it("parses a valid mini-task", () => {
+    const result = parseMiniTaskForm(formData(valid));
+    expect(result.ok && result.data).toEqual({
+      title: "Bring a plant",
+      description: "",
+      reward: 3,
+      startsOn: "2026-10-26",
+      endsOn: "2026-10-27",
+    });
+  });
+
+  it("keeps rewards between 1 and 5 Clim Coin", () => {
+    expect(
+      errorsOf(parseMiniTaskForm(formData({ ...valid, reward: "0" }))),
+    ).toHaveProperty("reward");
+    expect(
+      errorsOf(parseMiniTaskForm(formData({ ...valid, reward: "6" }))).reward,
+    ).toMatch(/at most 5/);
+    expect(
+      errorsOf(parseMiniTaskForm(formData({ ...valid, reward: "1.5" }))),
+    ).toHaveProperty("reward");
+  });
+
+  it("rejects a last day before the first, and unreal dates", () => {
+    expect(
+      errorsOf(parseMiniTaskForm(formData({ ...valid, endsOn: "2026-10-25" })))
+        .endsOn,
+    ).toMatch(/before the first/);
+    expect(
+      errorsOf(
+        parseMiniTaskForm(formData({ ...valid, startsOn: "2026-02-30" })),
+      ),
+    ).toHaveProperty("startsOn");
+  });
+});
+
+describe("parseMiniTaskCompletionsForm", () => {
+  it("returns the ticked player ids, trimmed and deduplicated", () => {
+    expect(
+      parseMiniTaskCompletionsForm(
+        formData({
+          intent: "completions",
+          playerId: ["ann", " bob ", "ann", ""],
+        }),
+      ),
+    ).toEqual(["ann", "bob"]);
+    expect(parseMiniTaskCompletionsForm(formData({}))).toEqual([]);
   });
 });

@@ -8,11 +8,22 @@ import BackLink from "../../components/BackLink.astro";
 import AdminEditLink from "../../components/AdminEditLink.astro";
 import PointsChart from "../../components/PointsChart.astro";
 import AchievementBadge from "../../components/AchievementBadge.astro";
+import AwardCard from "../../components/AwardCard.astro";
 import PlayerAvatar from "../../components/PlayerAvatar.astro";
 import BonusPointsLedger from "../../components/BonusPointsLedger.astro";
-import { withBase } from "../../lib/url";
+import SkillPathBadge from "../../components/SkillPathBadge.astro";
+import Pagination from "../../components/Pagination.astro";
+import {
+  LIST_PAGE_SIZE,
+  pageHref,
+  paginate,
+  parsePage,
+} from "../../lib/pagination";
+import { assetUrl, withBase } from "../../lib/url";
 import { recordScope } from "../../lib/season-scope";
+import { isWrappedLive } from "../../data/seasons";
 import SeasonArchiveBanner from "../../components/SeasonArchiveBanner.astro";
+import { NAME_COLOUR_CLASS, PROFILE_THEME_INFO } from "../../lib/coin-ui";
 
 const isAdmin = (await Astro.locals.getViewer())?.isAdmin ?? false;
 const scope = await recordScope(Astro.locals, "player", Astro.params.id, {
@@ -29,6 +40,9 @@ const {
   getPlayerAchievements,
   getPlayerProgressionChart,
   getPlayerBonusSummary,
+  getPlayerStreakStats,
+  getLoadout,
+  getPlayerSkills,
 } = scope.queries;
 
 const { id } = Astro.params;
@@ -51,6 +65,24 @@ const compareOptions = getPlayerCompareOptions(player.id);
 const achievements = getPlayerAchievements(player.id);
 const progressionChart = getPlayerProgressionChart(player.id);
 const bonusSummary = getPlayerBonusSummary(player.id);
+const streakStats = getPlayerStreakStats(player.id);
+// Clim Coin flair: the pet, avatar and cosmetics they're wearing.
+const loadout = getLoadout(player.id);
+const skills = getPlayerSkills(player.id);
+const wrappedHref = isWrappedLive(season)
+  ? withBase(`/seasons/${season.id}/wrapped/${player.id}`)
+  : undefined;
+
+// The task log and bonus ledger page independently on their own params.
+const pageOf = (param: string) => parsePage(Astro.url.searchParams.get(param));
+const pageLinks = (param: string, hash: string) => (page: number) =>
+  pageHref(Astro.url, param, page, { hash });
+const historyPage = paginate(results, pageOf("history"), LIST_PAGE_SIZE);
+const bonusPage = paginate(
+  bonusSummary.entries,
+  pageOf("bonuses"),
+  LIST_PAGE_SIZE,
+);
 
 // Signed points with a true minus sign, e.g. "+3" / "−2" / "0".
 const signed = (n: number) =>
@@ -94,6 +126,16 @@ const positionClasses = (position: number) => {
             />
           )
         }
+        {
+          wrappedHref && (
+            <a
+              href={wrappedHref}
+              class="inline-flex items-center gap-2 rounded-md border border-magenta/60 bg-magenta/10 px-3 py-1.5 text-[11px] font-bold tracking-widest text-magenta transition-colors hover:bg-magenta hover:text-term-bg"
+            >
+              SEASON WRAPPED <span aria-hidden="true">&rarr;</span>
+            </a>
+          )
+        }
         <ShareButton
           url={new URL(Astro.url.pathname, Astro.site).href}
           shareTitle={`${player.name} · EAYL Taskmaster`}
@@ -104,49 +146,100 @@ const positionClasses = (position: number) => {
     </div>
 
     <!-- Header -->
-    <header class="mt-6">
+    <header
+      class:list={[
+        "mt-6",
+        loadout.theme && [
+          "rounded-xl border p-4 sm:p-5",
+          PROFILE_THEME_INFO[loadout.theme].class,
+        ],
+      ]}
+    >
       <p
         class="prompt text-xs font-bold tracking-[0.3em] text-ink-dim uppercase"
       >
         cat ~/players/{player.id}.md
       </p>
       <div class="mt-4 flex items-center gap-4 sm:gap-5">
-        <PlayerAvatar
-          player={player}
-          class="h-16 w-16 rounded-lg sm:h-20 sm:w-20"
-        />
+        <div class="relative shrink-0">
+          <PlayerAvatar
+            player={player}
+            class="h-16 w-16 rounded-lg sm:h-20 sm:w-20"
+          />
+          {
+            loadout.pet?.imageUrl && (
+              <img
+                src={assetUrl(loadout.pet.imageUrl)}
+                alt={`Pet: ${loadout.petName ?? loadout.pet.name}`}
+                title={loadout.petName ?? loadout.pet.name}
+                width="32"
+                height="32"
+                class="absolute -bottom-2 -right-3 h-8 w-8 [image-rendering:pixelated] drop-shadow"
+              />
+            )
+          }
+        </div>
         <div class="min-w-0">
           <h1
-            class="truncate text-4xl font-extrabold tracking-tight text-ink text-glow sm:text-6xl"
+            class:list={[
+              "truncate text-4xl font-extrabold tracking-tight text-glow sm:text-6xl",
+              loadout.nameColour
+                ? NAME_COLOUR_CLASS[loadout.nameColour]
+                : "text-ink",
+            ]}
           >
             {player.name}
           </h1>
+          {
+            loadout.title && (
+              <p class="mt-1 text-sm font-bold italic text-magenta">
+                “{loadout.title}”
+              </p>
+            )
+          }
+          {
+            loadout.shellPrompt && (
+              <p class="mt-1 truncate text-xs text-acid">
+                {loadout.shellPrompt}
+                <span class="caret" aria-hidden="true"></span>
+              </p>
+            )
+          }
+          {skills && <SkillPathBadge skills={skills} class="mt-2" />}
           <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
             <span class="font-bold tracking-widest text-magenta">
               RANK #{rank}
             </span>
-            <span class="text-ink-faint" aria-hidden="true">·</span>
-            <span class="text-ink-dim">
-              <span class="font-bold text-acid">{standing.points}</span> pts
+            {
+              /* Each separator travels with the item after it so a wrapped
+                line never ends on a dangling dot. */
+            }
+            <span class="inline-flex items-center gap-x-3 text-ink-dim">
+              <span class="text-ink-faint" aria-hidden="true">·</span>
+              <span>
+                <span class="font-bold text-acid">{standing.points}</span> pts
+              </span>
             </span>
-            <span class="text-ink-faint" aria-hidden="true">·</span>
-            <span class="text-ink-dim">
-              {standing.wins}{" "}
-              {standing.wins === 1 ? "win" : "wins"}
+            <span class="inline-flex items-center gap-x-3 text-ink-dim">
+              <span class="text-ink-faint" aria-hidden="true">·</span>
+              <span>
+                {standing.wins}{" "}
+                {standing.wins === 1 ? "win" : "wins"}
+              </span>
             </span>
             {
               team && (
-                <>
+                <span class="inline-flex min-w-0 items-center gap-x-3">
                   <span class="text-ink-faint" aria-hidden="true">
                     ·
                   </span>
                   <a
                     href={withBase(`/teams/${team.id}`)}
-                    class="text-cyan underline-offset-2 hover:underline"
+                    class="min-w-0 text-cyan underline-offset-2 hover:underline"
                   >
                     {team.name}
                   </a>
-                </>
+                </span>
               )
             }
           </p>
@@ -228,6 +321,25 @@ const positionClasses = (position: number) => {
       )
     }
 
+    <!-- Streaks & comebacks -->
+    {
+      streakStats.length > 0 && (
+        <section class="mt-8" aria-labelledby="streaks-heading">
+          <h2
+            id="streaks-heading"
+            class="prompt mb-3 text-xs font-bold tracking-[0.3em] text-ink-dim uppercase"
+          >
+            streaks --player {player.id}
+          </h2>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {streakStats.map((stat) => (
+              <AwardCard award={stat} />
+            ))}
+          </div>
+        </section>
+      )
+    }
+
     <!-- Compare with… entry point -->
     <ComparePicker
       playerId={player.id}
@@ -261,8 +373,10 @@ const positionClasses = (position: number) => {
     }
 
     <!-- Task-by-task record -->
-    <section class="mt-12">
-      <div class="mb-4 flex items-end justify-between gap-4">
+    <section id="history" class="mt-12 scroll-mt-24">
+      <div
+        class="mb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2"
+      >
         <h2
           class="prompt text-xs font-bold tracking-[0.3em] text-ink-dim uppercase"
         >
@@ -293,7 +407,7 @@ const positionClasses = (position: number) => {
                   <tr class="border-b border-grid">
                     <th
                       scope="col"
-                      class="px-3 py-2.5 text-left text-[10px] font-bold tracking-[0.2em] text-ink-faint uppercase"
+                      class="hidden px-3 py-2.5 text-left text-[10px] font-bold tracking-[0.2em] text-ink-faint uppercase sm:table-cell"
                     >
                       Week
                     </th>
@@ -318,12 +432,15 @@ const positionClasses = (position: number) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((result) => (
+                  {historyPage.items.map((result) => (
                     <tr class="group border-b border-grid-soft transition-colors last:border-b-0 hover:bg-term-panel-2/60">
-                      <td class="px-3 py-3 whitespace-nowrap text-[11px] font-bold tracking-[0.2em] text-magenta">
+                      <td class="hidden px-3 py-3 text-[11px] font-bold tracking-[0.2em] whitespace-nowrap text-magenta sm:table-cell">
                         {weekLabel(result.task.weekNumber)}
                       </td>
                       <td class="px-3 py-3">
+                        <span class="block text-[10px] font-bold tracking-[0.2em] text-magenta sm:hidden">
+                          {weekLabel(result.task.weekNumber)}
+                        </span>
                         <a
                           href={withBase(`/tasks/${result.task.id}`)}
                           class="font-semibold text-ink group-hover:text-acid"
@@ -332,7 +449,7 @@ const positionClasses = (position: number) => {
                         </a>
                       </td>
                       <td class="px-3 py-3 text-center">
-                        <span class="inline-flex items-center gap-1.5">
+                        <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
                           {medal(result.position) && (
                             <span aria-hidden="true">
                               {medal(result.position)}
@@ -374,10 +491,21 @@ const positionClasses = (position: number) => {
           )
         }
       </TerminalWindow>
+      <Pagination
+        info={historyPage}
+        href={pageLinks("history", "history")}
+        label="Task history pages"
+        itemLabel="tasks"
+        class="mt-3"
+      />
     </section>
 
     <!-- Bonus points & deductions -->
-    <section class="mt-12" aria-labelledby="bonus-heading">
+    <section
+      id="bonuses"
+      class="mt-12 scroll-mt-24"
+      aria-labelledby="bonus-heading"
+    >
       <div
         class="mb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2"
       >
@@ -421,12 +549,19 @@ const positionClasses = (position: number) => {
         bodyClass="p-0 sm:p-0"
       >
         <BonusPointsLedger
-          entries={bonusSummary.entries}
+          entries={bonusPage.items}
           subject="week"
           caption={`${player.name}'s bonus points and deductions, week by week`}
           emptyMessage="No bonus points or deductions so far."
         />
       </TerminalWindow>
+      <Pagination
+        info={bonusPage}
+        href={pageLinks("bonuses", "bonuses")}
+        label="Bonus ledger pages"
+        itemLabel="adjustments"
+        class="mt-3"
+      />
 
       <p class="mt-4 text-[11px] text-ink-faint">
         <span class="text-acid">//</span> Bonuses and deductions count toward the

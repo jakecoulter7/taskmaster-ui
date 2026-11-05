@@ -144,14 +144,14 @@ export async function linkPlayerAccount(
 
 // ── Self-service ──────────────────────────────────────────────────────
 
-/** A player editing their own public profile (bio and avatar only). */
+/** A player editing their own public profile (their bio only). */
 export async function updateOwnProfile(
   playerId: string,
   input: ProfileInput,
 ): Promise<void> {
   await getDb()
     .update(players)
-    .set({ bio: input.bio, avatarUrl: input.avatarUrl })
+    .set({ bio: input.bio })
     .where(eq(players.id, playerId));
 }
 

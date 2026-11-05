@@ -1,7 +1,26 @@
 import { z } from "astro/zod";
 import type { PollRecord } from "../data/admin";
 import { toWallClock } from "./time";
-import type { SubmissionOutcome } from "../types";
+import type {
+  DailyBonusReward,
+  FeatureFlagKey,
+  SubmissionOutcome,
+} from "../types";
+import { FEATURE_FLAG_KEYS } from "../data/feature-flags";
+import { MINI_TASK_MAX_REWARD } from "../data/mini-tasks";
+import { DAILY_BONUS_DAYS, DAILY_BONUS_MAX_COINS } from "../data/daily-bonus";
+import {
+  AVATAR_FRAMES,
+  COSMETIC_KINDS,
+  CRATES,
+  DEAL_DISCOUNT_RANGE,
+  NAME_COLOURS,
+  POWER_UP_KINDS,
+  PROFILE_THEMES,
+  SHELL_PROMPT_MAX,
+  SHOP_CATEGORIES,
+  WISH_MAX,
+} from "../data/coin-rules";
 import {
   MAX_CAPTION_LENGTH,
   MAX_PHOTO_BYTES,
@@ -23,7 +42,8 @@ export type FormValues = Record<string, string>;
 export type FieldErrors = Record<string, string>;
 
 export type ParseResult<T> = { values: FormValues } & (
-  { ok: true; data: T } | { ok: false; errors: FieldErrors }
+  | { ok: true; data: T }
+  | { ok: false; errors: FieldErrors }
 );
 
 /** Raw string values from a form (first value per name). */
@@ -244,16 +264,19 @@ export function parseTeamForm(form: FormData): ParseResult<TeamInput> {
 
 // ── Tasks ─────────────────────────────────────────────────────────────
 
+const DATE_TIME_LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+const toWallClockTimestamp = (v: string) => {
+  const [date, time] = v.split("T");
+  return `${date} ${time.length === 5 ? `${time}:00` : time}`;
+};
+
 /** `<input type="datetime-local">` value → Postgres wall-clock timestamp. */
 const localDateTime = z
   .string()
   .trim()
   .min(1, "Required.")
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "Enter a date and time.")
-  .transform((v) => {
-    const [date, time] = v.split("T");
-    return `${date} ${time.length === 5 ? `${time}:00` : time}`;
-  });
+  .regex(DATE_TIME_LOCAL, "Enter a date and time.")
+  .transform(toWallClockTimestamp);
 
 const taskSchema = z
   .object({
@@ -278,6 +301,7 @@ const taskSchema = z
     deadline: localDateTime,
     format: z.enum(["individual", "team"], { error: "Pick a format." }),
     revealPassword: optionalText(60),
+    hint: optionalText(1000),
     maxSubmissions: z
       .string()
       .trim()
@@ -342,6 +366,7 @@ export function parseTaskForm(form: FormData): ParseResult<TaskInput> {
       deadline: values.deadline ?? "",
       format: values.format ?? "",
       revealPassword: values.revealPassword ?? "",
+      hint: values.hint ?? "",
       maxSubmissions: values.maxSubmissions ?? "0",
       submissionKinds,
     },
@@ -567,7 +592,8 @@ export function parseChangelogForm(
 // ── Entries added for a player ────────────────────────────────────────
 
 export type AddEntryInput = { playerId: string } & (
-  { kind: "text"; text: string } | { kind: "photo"; photo: PhotoEntryInput }
+  | { kind: "text"; text: string }
+  | { kind: "photo"; photo: PhotoEntryInput }
 );
 
 const photoErrors: Partial<Record<SubmissionOutcome, string>> = {
@@ -949,4 +975,554 @@ export function pollBonusWeeks(
     id: t.id,
     label: `week ${String(t.weekNumber).padStart(2, "0")}: ${t.title}`,
   }));
+}
+
+// ── Clim Coin ─────────────────────────────────────────────────────────
+
+const imagePath = optionalText(500).refine(
+  (v) => v === null || /^(https:\/\/|\/)\S+$/.test(v),
+  "Use an https:// URL or a site path starting with /, e.g. /shop/pets/duck.svg.",
+);
+
+const blankToNull = z
+  .string()
+  .trim()
+  .transform((v) => (v === "" ? null : v));
+
+/** An optional `<input type="datetime-local">`: blank means no limit. */
+const optionalLocalDateTime = z
+  .string()
+  .trim()
+  .refine((v) => v === "" || DATE_TIME_LOCAL.test(v), "Enter a date and time.")
+  .transform((v) => (v === "" ? null : toWallClockTimestamp(v)));
+
+/** A shop item's stock per season: blank means unlimited. */
+const optionalStock = z
+  .string()
+  .trim()
+  .transform((v) => (v === "" ? null : Number(v)))
+  .pipe(
+    z
+      .number({ error: "Enter a whole number." })
+      .int("Enter a whole number.")
+      .min(0, "Must be 0 or more.")
+      .max(10000, "Keep it to 10000 or less.")
+      .nullable(),
+  );
+
+const shopItemSchema = z
+  .object({
+    id: slug,
+    name: requiredText(60),
+    description: z.string().trim().max(300, "Keep it under 300 characters."),
+    category: z.enum(SHOP_CATEGORIES, { error: "Pick a category." }),
+    price: z
+      .string()
+      .trim()
+      .min(1, "Required.")
+      .transform(Number)
+      .pipe(
+        z
+          .number({ error: "Enter a whole number." })
+          .int("Enter a whole number.")
+          .min(0, "Must be 0 or more.")
+          .max(10000, "Keep it to 10000 or less."),
+      ),
+    imageUrl: imagePath,
+    cosmeticKind: blankToNull,
+    cosmeticValue: blankToNull,
+    powerUp: blankToNull,
+    available: z.boolean(),
+    crateOnly: z.boolean(),
+    crateId: blankToNull,
+    availableFrom: optionalLocalDateTime,
+    availableUntil: optionalLocalDateTime,
+    stock: optionalStock,
+    sortOrder: optionalOrder,
+  })
+  .superRefine((item, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: "custom", path: [path], message });
+    if (item.crateOnly && item.category === "power_up") {
+      issue("crateOnly", "Power-ups can't be egg exclusives.");
+    }
+    if (item.crateOnly && item.stock !== null) {
+      issue("stock", "Egg exclusives aren't sold in the shop: leave it blank.");
+    }
+    if (item.crateId !== null) {
+      if (!CRATES.some((c) => c.exclusive && c.id === item.crateId)) {
+        issue("crateId", "Pick one of the seasonal eggs.");
+      } else if (!item.crateOnly) {
+        issue("crateId", "A seasonal egg's exclusive must be egg exclusive.");
+      }
+    }
+    if (
+      item.availableFrom &&
+      item.availableUntil &&
+      item.availableUntil <= item.availableFrom
+    ) {
+      issue("availableUntil", "The end must be after the start.");
+    }
+    if (
+      (item.category === "pet" || item.category === "avatar") &&
+      !item.imageUrl
+    ) {
+      issue("imageUrl", "Pets and avatars need an image.");
+    }
+    if (item.category === "power_up") {
+      if (!POWER_UP_KINDS.some((k) => k === item.powerUp)) {
+        issue("powerUp", "Pick what the power-up does.");
+      }
+    }
+    if (item.category === "cosmetic") {
+      const kind = COSMETIC_KINDS.find((k) => k === item.cosmeticKind);
+      const value = item.cosmeticValue;
+      if (!kind) {
+        issue("cosmeticKind", "Pick the kind of cosmetic.");
+      } else if (kind === "title") {
+        if (!value) issue("cosmeticValue", "Enter the title text.");
+        else if (value.length > 40) {
+          issue("cosmeticValue", "Keep titles under 40 characters.");
+        }
+      } else if (kind === "name_colour") {
+        if (!NAME_COLOURS.some((c) => c === value)) {
+          issue("cosmeticValue", `Use one of: ${NAME_COLOURS.join(", ")}.`);
+        }
+      } else if (kind === "avatar_frame") {
+        if (!AVATAR_FRAMES.some((f) => f === value)) {
+          issue("cosmeticValue", `Use one of: ${AVATAR_FRAMES.join(", ")}.`);
+        }
+      } else if (kind === "shell_prompt") {
+        if (!value) {
+          issue("cosmeticValue", "Enter the prompt, e.g. {name}@taskmaster:~$");
+        } else if (value.length > SHELL_PROMPT_MAX) {
+          issue(
+            "cosmeticValue",
+            `Keep prompts to ${SHELL_PROMPT_MAX} characters or fewer.`,
+          );
+        }
+      } else if (!PROFILE_THEMES.some((t) => t === value)) {
+        issue("cosmeticValue", `Use one of: ${PROFILE_THEMES.join(", ")}.`);
+      }
+    }
+  })
+  .transform((item) => ({
+    ...item,
+    cosmeticKind:
+      item.category === "cosmetic"
+        ? (COSMETIC_KINDS.find((k) => k === item.cosmeticKind) ?? null)
+        : null,
+    cosmeticValue: item.category === "cosmetic" ? item.cosmeticValue : null,
+    powerUp:
+      item.category === "power_up"
+        ? (POWER_UP_KINDS.find((k) => k === item.powerUp) ?? null)
+        : null,
+  }));
+
+export type ShopItemInput = z.output<typeof shopItemSchema>;
+
+/**
+ * The shop item form. On edit the page passes the stored category, cosmetic
+ * kind and power-up back in: they're fixed once created, so owned items keep
+ * their slot and effect.
+ */
+export function parseShopItemForm(form: FormData): ParseResult<ShopItemInput> {
+  const values = formValues(form);
+  const available = form.get("available") === "on";
+  const crateOnly = form.get("crateOnly") === "on";
+  return parseWith(
+    shopItemSchema,
+    {
+      id: values.id ?? "",
+      name: values.name ?? "",
+      description: values.description ?? "",
+      category: values.category ?? "",
+      price: values.price ?? "",
+      imageUrl: values.imageUrl ?? "",
+      cosmeticKind: values.cosmeticKind ?? "",
+      cosmeticValue: values.cosmeticValue ?? "",
+      powerUp: values.powerUp ?? "",
+      available,
+      crateOnly,
+      crateId: values.crateId ?? "",
+      availableFrom: values.availableFrom ?? "",
+      availableUntil: values.availableUntil ?? "",
+      stock: values.stock ?? "",
+      sortOrder: values.sortOrder ?? "",
+    },
+    {
+      ...values,
+      available: available ? "on" : "",
+      crateOnly: crateOnly ? "on" : "",
+    },
+  );
+}
+
+/** The most items a bundle can hold. */
+export const BUNDLE_MAX_ITEMS = 8;
+
+const bundleSchema = z.object({
+  id: slug,
+  name: requiredText(60),
+  description: z.string().trim().max(300, "Keep it under 300 characters."),
+  price: z
+    .string()
+    .trim()
+    .min(1, "Required.")
+    .transform(Number)
+    .pipe(
+      z
+        .number({ error: "Enter a whole number." })
+        .int("Enter a whole number.")
+        .min(0, "Must be 0 or more.")
+        .max(10000, "Keep it to 10000 or less."),
+    ),
+  available: z.boolean(),
+  sortOrder: optionalOrder,
+  itemIds: z
+    .array(slug)
+    .min(2, "Pick at least two items.")
+    .max(BUNDLE_MAX_ITEMS, `Pick ${BUNDLE_MAX_ITEMS} items or fewer.`),
+});
+
+export type BundleInput = z.output<typeof bundleSchema>;
+
+/**
+ * The bundle form. `catalogue` is the shop: a bundle's items must be in it,
+ * sold directly (no egg exclusives or skill tree rewards), and hold at most
+ * one power-up of each effect (a second could never be used).
+ */
+export function parseBundleForm(
+  form: FormData,
+  catalogue: readonly {
+    id: string;
+    crateOnly: boolean;
+    skillOnly: boolean;
+    powerUp: string | null;
+  }[],
+): ParseResult<BundleInput> {
+  const values = formValues(form);
+  const available = form.get("available") === "on";
+  const itemIds = [
+    ...new Set(form.getAll("itemIds").map((v) => String(v).trim())),
+  ].filter(Boolean);
+  const shown = {
+    ...values,
+    available: available ? "on" : "",
+    itemIds: itemIds.join(","),
+  };
+  const parsed = parseWith(
+    bundleSchema,
+    {
+      id: values.id ?? "",
+      name: values.name ?? "",
+      description: values.description ?? "",
+      price: values.price ?? "",
+      available,
+      sortOrder: values.sortOrder ?? "",
+      itemIds,
+    },
+    shown,
+  );
+  if (!parsed.ok) return parsed;
+  const byId = new Map(catalogue.map((item) => [item.id, item]));
+  const picked = parsed.data.itemIds.map((id) => byId.get(id));
+  if (picked.some((item) => !item || item.crateOnly || item.skillOnly)) {
+    return {
+      ok: false,
+      errors: { itemIds: "Only items sold directly in the shop can go in." },
+      values: shown,
+    };
+  }
+  const effects = picked.flatMap((item) => item?.powerUp ?? []);
+  if (new Set(effects).size !== effects.length) {
+    return {
+      ok: false,
+      errors: { itemIds: "Only one power-up of each kind can go in." },
+      values: shown,
+    };
+  }
+  return parsed;
+}
+
+const dealSchema = z.object({
+  weekStart: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a week.")
+    .refine(
+      (v) => new Date(`${v}T00:00:00Z`).getUTCDay() === 1,
+      "Pick a week (it starts on a Monday).",
+    ),
+  itemId: slug,
+  discountPercent: z
+    .string()
+    .trim()
+    .min(1, "Required.")
+    .transform(Number)
+    .pipe(
+      z
+        .number({ error: "Enter a whole number." })
+        .int("Enter a whole number.")
+        .min(
+          DEAL_DISCOUNT_RANGE.min,
+          `At least ${DEAL_DISCOUNT_RANGE.min}% off.`,
+        )
+        .max(
+          DEAL_DISCOUNT_RANGE.max,
+          `At most ${DEAL_DISCOUNT_RANGE.max}% off.`,
+        ),
+    ),
+});
+
+export type DealInput = z.output<typeof dealSchema>;
+
+/** The deal of the week override form. */
+export function parseDealForm(form: FormData): ParseResult<DealInput> {
+  const values = formValues(form);
+  return parseWith(
+    dealSchema,
+    {
+      weekStart: values.weekStart ?? "",
+      itemId: values.itemId ?? "",
+      discountPercent: values.discountPercent ?? "",
+    },
+    values,
+  );
+}
+
+const featureFlagSchema = z.object({
+  key: z.enum(FEATURE_FLAG_KEYS as [FeatureFlagKey, ...FeatureFlagKey[]]),
+  enabled: z.enum(["on", "off"]).transform((v) => v === "on"),
+});
+
+export type FeatureFlagInput = z.output<typeof featureFlagSchema>;
+
+/** A feature flag toggle, or `undefined` for an unknown flag or value. */
+export function parseFeatureFlagForm(
+  form: FormData,
+): FeatureFlagInput | undefined {
+  const values = formValues(form);
+  const parsed = featureFlagSchema.safeParse({
+    key: values.key ?? "",
+    enabled: values.enabled ?? "",
+  });
+  return parsed.success ? parsed.data : undefined;
+}
+
+const coinAdjustmentSchema = z.object({
+  amount: integer().refine((n) => n !== 0, "Use a non-zero amount."),
+  reason: requiredText(200),
+});
+
+export type CoinAdjustmentInput = z.output<typeof coinAdjustmentSchema>;
+
+/** An admin's Clim Coin grant (positive) or deduction (negative). */
+export function parseCoinAdjustmentForm(
+  form: FormData,
+): ParseResult<CoinAdjustmentInput> {
+  const values = formValues(form);
+  return parseWith(
+    coinAdjustmentSchema,
+    { amount: values.amount ?? "", reason: values.reason ?? "" },
+    values,
+  );
+}
+
+// ── Mini-tasks ────────────────────────────────────────────────────────
+
+const calendarDate = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date.")
+  .refine(
+    (v) =>
+      !Number.isNaN(Date.parse(v)) &&
+      new Date(v).toISOString().slice(0, 10) === v,
+    "Pick a real date.",
+  );
+
+const miniTaskSchema = z
+  .object({
+    title: requiredText(80),
+    description: z.string().trim().max(300, "Keep it under 300 characters."),
+    reward: integer().pipe(
+      z
+        .number()
+        .min(1, "Pay at least 1 Clim Coin.")
+        .max(
+          MINI_TASK_MAX_REWARD,
+          `Mini-tasks pay at most ${MINI_TASK_MAX_REWARD} Clim Coin.`,
+        ),
+    ),
+    startsOn: calendarDate,
+    endsOn: calendarDate,
+  })
+  .refine((v) => v.endsOn >= v.startsOn, {
+    path: ["endsOn"],
+    message: "The last day can't be before the first.",
+  });
+
+export type MiniTaskInput = z.output<typeof miniTaskSchema>;
+
+/** A mini-task's title, reward and the days it runs. */
+export function parseMiniTaskForm(form: FormData): ParseResult<MiniTaskInput> {
+  const values = formValues(form);
+  return parseWith(
+    miniTaskSchema,
+    {
+      title: values.title ?? "",
+      description: values.description ?? "",
+      reward: values.reward ?? "",
+      startsOn: values.startsOn ?? "",
+      endsOn: values.endsOn ?? "",
+    },
+    values,
+  );
+}
+
+/** The players ticked on a mini-task's completion checklist (deduplicated). */
+export function parseMiniTaskCompletionsForm(form: FormData): string[] {
+  return [
+    ...new Set(
+      form
+        .getAll("playerId")
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter((v) => v !== ""),
+    ),
+  ];
+}
+
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+const dailyBonusCoins = z
+  .string()
+  .trim()
+  .min(1, "Required.")
+  .transform(Number)
+  .pipe(
+    z
+      .number({ error: "Enter a whole number." })
+      .int("Enter a whole number.")
+      .min(0, "Must be 0 or more.")
+      .max(
+        DAILY_BONUS_MAX_COINS,
+        `A day pays at most ${DAILY_BONUS_MAX_COINS} Clim Coin.`,
+      ),
+  );
+
+/** A day's extra: blank, `item:<shop item id>` or `egg:<crate id>`. */
+function parseDailyBonusExtra(
+  value: string,
+): Pick<DailyBonusReward, "itemId" | "crateId"> | undefined {
+  const v = value.trim();
+  if (v === "") return {};
+  if (v.startsWith("item:") && v.length > 5) return { itemId: v.slice(5) };
+  const crateId = v.startsWith("egg:") ? v.slice(4) : "";
+  return CRATES.some((crate) => crate.id === crateId) ? { crateId } : undefined;
+}
+
+/**
+ * The daily bonus schedule: `coins<day>` and `extra<day>` for each day of
+ * the cycle. Every day has to give something.
+ */
+export function parseDailyBonusForm(
+  form: FormData,
+): ParseResult<DailyBonusReward[]> {
+  const values = formValues(form);
+  const errors: FieldErrors = {};
+  const rewards: DailyBonusReward[] = [];
+  for (let day = 1; day <= DAILY_BONUS_DAYS; day++) {
+    const coins = dailyBonusCoins.safeParse(values[`coins${day}`] ?? "");
+    const extra = parseDailyBonusExtra(values[`extra${day}`] ?? "");
+    if (!coins.success) {
+      errors[`coins${day}`] = coins.error.issues[0]?.message ?? "Invalid.";
+    } else if (!extra) {
+      errors[`extra${day}`] = "Pick an item or an egg from the list.";
+    } else if (coins.data === 0 && !extra.itemId && !extra.crateId) {
+      errors[`coins${day}`] = "Give coins, an item or an egg.";
+    } else {
+      rewards.push({ day, coins: coins.data, ...extra });
+    }
+  }
+  return Object.keys(errors).length > 0
+    ? { ok: false, errors, values }
+    : { ok: true, data: rewards, values };
+}
+
+const itemGiftSchema = z.object({
+  itemId: z.string().trim().min(1, "Pick an item to gift."),
+  reason: requiredText(200),
+});
+
+export type ItemGiftInput = z.output<typeof itemGiftSchema>;
+
+/**
+ * An admin gifting a player a shop item (pet, avatar, cosmetic or power-up).
+ * The note is posted as `giftReason`, so its field id doesn't clash with the
+ * coin form's `reason` on the same page.
+ */
+export function parseItemGiftForm(form: FormData): ParseResult<ItemGiftInput> {
+  const values = formValues(form);
+  return parseWith(
+    itemGiftSchema,
+    { itemId: values.itemId ?? "", reason: values.giftReason ?? "" },
+    values,
+  );
+}
+
+const eggGiftSchema = z.object({
+  crateId: z
+    .string()
+    .trim()
+    .refine(
+      (id) => CRATES.some((crate) => crate.id === id),
+      "Pick an egg to gift.",
+    ),
+  reason: requiredText(200),
+});
+
+export type EggGiftInput = z.output<typeof eggGiftSchema>;
+
+/**
+ * An admin gifting a player a mystery egg to crack from their inventory.
+ * The note is posted as `eggReason`, so its field id doesn't clash with the
+ * other gift forms on the same page.
+ */
+export function parseEggGiftForm(form: FormData): ParseResult<EggGiftInput> {
+  const values = formValues(form);
+  return parseWith(
+    eggGiftSchema,
+    { crateId: values.crateId ?? "", reason: values.eggReason ?? "" },
+    values,
+  );
+}
+
+const wishDecisionSchema = z.object({
+  rowId: z.coerce.number().int().positive(),
+  decision: z.enum(["granted", "declined"]),
+  response: z
+    .string()
+    .trim()
+    .max(WISH_MAX, `Keep it under ${WISH_MAX} characters.`)
+    .transform((v) => (v === "" ? null : v.replace(/\s+/g, " "))),
+});
+
+export type WishDecisionInput = z.output<typeof wishDecisionSchema>;
+
+/** The Taskmaster granting or declining a wish, with an optional reply. */
+export function parseWishDecisionForm(
+  form: FormData,
+): ParseResult<WishDecisionInput> {
+  const values = formValues(form);
+  return parseWith(
+    wishDecisionSchema,
+    {
+      rowId: values.rowId ?? "",
+      decision: values.decision ?? "",
+      response: values.response ?? "",
+    },
+    values,
+  );
 }

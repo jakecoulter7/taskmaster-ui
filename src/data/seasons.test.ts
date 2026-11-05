@@ -117,6 +117,9 @@ describe("isSeasonPublic", () => {
 describe("rowsForSeason", () => {
   const empty: CompetitionRows = {
     seasonRows: [],
+    playerIndexRows: [],
+    teamIndexRows: [],
+    taskIndexRows: [],
     playerRows: [],
     teamRows: [],
     memberRows: [],
@@ -131,6 +134,36 @@ describe("rowsForSeason", () => {
     predictionRows: [],
     recapRows: [],
     changelogRows: [],
+    shopItemRows: [],
+    coinPurchaseRows: [],
+    powerUpUseRows: [],
+    equippedRows: [],
+    coinAdjustmentRows: [],
+    entryRows: [],
+    crateOpenRows: [],
+    coinGiftRows: [],
+    featureFlagRows: [],
+    itemGiftRows: [],
+    eggGiftRows: [],
+    wishRows: [],
+    skillPathRows: [],
+    skillUnlockRows: [],
+    miniTaskRows: [],
+    miniTaskCompletionRows: [],
+    marketListingRows: [],
+    marketOfferRows: [],
+    marketSaleRows: [],
+    bountyRows: [],
+    bountyClaimRows: [],
+    raffleTicketRows: [],
+    renameTokenRows: [],
+    wrappedGiftRows: [],
+    bundlePurchaseRows: [],
+    shopBundleRows: [],
+    shopBundleItemRows: [],
+    shopDealRows: [],
+    dailyBonusRewardRows: [],
+    dailyBonusClaimRows: [],
   };
   const player = (id: string, seasonId: string) => ({
     id,
@@ -149,6 +182,35 @@ describe("rowsForSeason", () => {
     updatedAt: "2026-01-01 00:00:00+00",
   });
 
+  const purchase = (id: number, playerId: string) => ({
+    id,
+    playerId,
+    itemId: "duck",
+    price: 5,
+    bundlePurchaseId: null,
+    createdAt: "2026-01-01 00:00:00+00",
+  });
+  const use = (id: number, taskId: string, playerId: string) => ({
+    id,
+    purchaseId: id,
+    playerId,
+    taskId,
+    effect: "hint" as const,
+    copiedEffect: null,
+    targetPlayerId: null,
+    createdAt: "2026-01-01 00:00:00+00",
+  });
+
+  const gift = (id: number, seasonId: string, playerId: string) => ({
+    id,
+    seasonId,
+    fromPlayerId: playerId,
+    toPlayerId: "x",
+    amount: 2,
+    message: null,
+    createdAt: "2026-01-01 00:00:00+00",
+  });
+
   const rows: CompetitionRows = {
     ...empty,
     playerRows: [player("ann", "a"), player("bob", "b")],
@@ -162,6 +224,44 @@ describe("rowsForSeason", () => {
       // A player from another season can't predict on this one's weeks.
       prediction("a1", "bob"),
       prediction("b1", "bob"),
+    ],
+    coinPurchaseRows: [
+      purchase(1, "ann"),
+      // Another season's wallet.
+      purchase(2, "bob"),
+    ],
+    powerUpUseRows: [
+      use(1, "a1", "ann"),
+      // A player from another season can't use power-ups on this one's weeks.
+      use(2, "a1", "bob"),
+    ],
+    coinGiftRows: [
+      gift(1, "a", "ann"),
+      // Another season's gift.
+      gift(2, "b", "bob"),
+    ],
+    shopItemRows: [
+      {
+        id: "duck",
+        name: "Duck",
+        description: "",
+        category: "pet",
+        price: 5,
+        imageUrl: "/shop/pets/duck.svg",
+        cosmeticKind: null,
+        cosmeticValue: null,
+        powerUp: null,
+        available: true,
+        crateOnly: false,
+        crateId: null,
+        skillOnly: false,
+        availableFrom: null,
+        availableUntil: null,
+        stock: null,
+        sortOrder: 0,
+        createdAt: "2026-01-01 00:00:00+00",
+        updatedAt: "2026-01-01 00:00:00+00",
+      },
     ],
     changelogRows: [
       {
@@ -182,9 +282,14 @@ describe("rowsForSeason", () => {
     expect(scoped.taskRows.map((r) => r.id)).toEqual(["a1"]);
     expect(scoped.taskScoreRows).toEqual([taskScoreRow("a1", "ann", 5)]);
     expect(scoped.predictionRows).toEqual([prediction("a1", "ann")]);
+    expect(scoped.coinPurchaseRows).toEqual([purchase(1, "ann")]);
+    expect(scoped.powerUpUseRows).toEqual([use(1, "a1", "ann")]);
+    expect(scoped.coinGiftRows).toEqual([gift(1, "a", "ann")]);
   });
 
   it("leaves site-wide rows alone", () => {
-    expect(rowsForSeason(rows, "a").changelogRows).toHaveLength(1);
+    const scoped = rowsForSeason(rows, "a");
+    expect(scoped.changelogRows).toHaveLength(1);
+    expect(scoped.shopItemRows).toHaveLength(1);
   });
 });

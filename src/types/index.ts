@@ -120,7 +120,8 @@ export interface Task {
  * `admin` never redacts (admins edit the real content).
  */
 export type TaskRevealContext =
-  { mode: "public"; unlockedTaskIds: ReadonlySet<string> } | { mode: "admin" };
+  | { mode: "public"; unlockedTaskIds: ReadonlySet<string> }
+  | { mode: "admin" };
 
 /** Why a reveal-password attempt on a task page failed. */
 export type RevealError = "denied" | "throttled";
@@ -132,6 +133,8 @@ export interface Score {
   /** Finishing position for the task (1 = winner). */
   position: number;
   comment?: string;
+  /** The player used Golden Week on this task (their points are boosted). */
+  goldenWeek?: boolean;
 }
 
 /**
@@ -201,6 +204,11 @@ export interface ScoreAuditEntry {
   /** Score comment or bonus reason. */
   noteBefore?: string;
   noteAfter?: string;
+}
+
+/** A score change together with the week it was made on. */
+export interface WeekScoreAuditEntry extends ScoreAuditEntry {
+  taskId: string;
 }
 
 /**
@@ -278,6 +286,10 @@ export interface CompetitionData {
   recaps: Record<string, WeekRecapContent>;
   /** The site changelog, newest first. */
   changelog: FeatureUpdate[];
+  /** Clim Coin: the shop, and the season's purchases, uses and grants. */
+  coins: ClimCoinData;
+  /** Site-wide feature flags, toggled in `/admin/site` (off unless set). */
+  features: FeatureFlags;
 }
 
 // ── Polls ─────────────────────────────────────────────────────────────
@@ -301,7 +313,10 @@ export type PollStatus = "scheduled" | "open" | "closed";
  *   "admin_only"  → never published.
  */
 export type PollResultsVisibility =
-  "always" | "after_vote" | "after_close" | "admin_only";
+  | "always"
+  | "after_vote"
+  | "after_close"
+  | "admin_only";
 
 export interface PollOption {
   id: number;
@@ -376,7 +391,8 @@ export interface LeaderboardRow {
 
 export interface TaskResult {
   task: Task;
-  winner: Player;
+  /** The winning player, or the winning squad for a team task. */
+  winnerName: string;
   winningScore: number;
   completionDate: string;
 }
@@ -589,7 +605,12 @@ export interface PlayerComparison {
  * `"admin"` entries are only included for signed-in admins.
  */
 export type CommandPaletteGroup =
-  "page" | "task" | "team" | "player" | "admin" | "action";
+  | "page"
+  | "task"
+  | "team"
+  | "player"
+  | "admin"
+  | "action";
 
 /** One area of the admin panel (sub-nav tab, dashboard shortcut, palette entry). */
 export interface AdminSection {
@@ -739,6 +760,38 @@ export interface Achievement {
   accent: Exclude<ChartAccent, "ink-dim">;
 }
 
+/** Which shelf an achievement sits on in the account page. */
+export type AchievementCategory =
+  | "results"
+  | "streaks"
+  | "taking-part"
+  | "coin";
+
+/** One achievement in the catalogue, with a player's progress towards it. */
+export interface AchievementProgress {
+  /** The badge as it shows once unlocked; `detail` describes the goal. */
+  achievement: Achievement;
+  category: AchievementCategory;
+  /** Progress so far, capped at `target`. */
+  current: number;
+  target: number;
+  unlocked: boolean;
+  /** 0–100, for the progress bar. */
+  percent: number;
+}
+
+/** A player's whole achievement catalogue, grouped by category. */
+export interface AchievementBoard {
+  unlockedCount: number;
+  total: number;
+  groups: {
+    category: AchievementCategory;
+    label: string;
+    command: string;
+    items: AchievementProgress[];
+  }[];
+}
+
 /** A single Hall of Fame / superlative award for the stats page. */
 export interface Award {
   id: string;
@@ -753,6 +806,136 @@ export interface Award {
   /** Supporting context, e.g. the task it relates to. */
   detail?: string;
   accent: "acid" | "magenta" | "amber" | "cyan";
+  /** Still in progress (e.g. a streak that's still going). */
+  active?: boolean;
+}
+
+// ─── Streaks & comebacks ─────────────────────────────────────────────────
+// Derived in `streak-queries.ts` from each scored week's results and the
+// overall standings straight after it.
+
+/** What a streak counts: weekly wins, top-3 finishes, or weeks with points. */
+export type StreakKind = "win" | "podium" | "scoring";
+
+/** A run of consecutive scored weeks that all met a streak's condition. */
+export interface StreakRun {
+  kind: StreakKind;
+  length: number;
+  fromWeek: number;
+  toWeek: number;
+  /**
+   * Still going: the run includes the latest scored week of a season that
+   * isn't over yet.
+   */
+  active: boolean;
+}
+
+/** Places gained in the overall standings over one week's results. */
+export interface RankClimb {
+  task: Task;
+  fromRank: number;
+  toRank: number;
+  places: number;
+}
+
+/** A recovery from a player's lowest overall rank to where they stand now. */
+export interface Comeback {
+  /** Their worst rank after any scored week (the latest such week). */
+  lowRank: number;
+  lowWeek: number;
+  /** Their rank now (the final rank once the season is closed). */
+  rank: number;
+  places: number;
+}
+
+/** One player's streaks, best climb and comeback across a season. */
+export interface PlayerStreaks {
+  player: Player;
+  /** The longest run of each kind (earliest on a tie), when there was one. */
+  longest: Partial<Record<StreakKind, StreakRun>>;
+  biggestClimb?: RankClimb;
+  comeback?: Comeback;
+  /** Best rank held after any scored week (the earliest such week). */
+  peak?: { rank: number; weekNumber: number };
+  /** Scored weeks after which they were top of the table (ties included). */
+  weeksAtTop: number;
+}
+
+// ─── Season "wrapped" ────────────────────────────────────────────────────
+// The end-of-season summary, public once a season is closed. Derived in
+// `wrapped-queries.ts` from the season's snapshot.
+
+/** A player and how many scored weeks they spent top of the table. */
+export interface TitleRaceLeader {
+  player: Player;
+  weeks: number;
+}
+
+/** The whole season, wrapped up. */
+export interface SeasonWrapped {
+  season: Season;
+  /** Final standings (every player, ranked). */
+  standings: LeaderboardRow[];
+  /** The top three who played, champion first. */
+  podium: LeaderboardRow[];
+  /** The champion's points lead over the runner-up. */
+  margin?: number;
+  winningSquad?: TeamStanding;
+  stats: CompetitionStats;
+  /** Weeks that were scored. */
+  weeksScored: number;
+  /** Net bonus points handed out across the season. */
+  bonusPoints: number;
+  /** Times a new outright leader took over after a week's results. */
+  leadChanges: number;
+  /** Everyone who topped the table after a week, most weeks first. */
+  leaders: TitleRaceLeader[];
+  /** The champion led after every scored week. */
+  wireToWire: boolean;
+  /** The season's streak and comeback leaders. */
+  streaks: Award[];
+  /** The season's superlatives (the champion is crowned separately). */
+  awards: Award[];
+}
+
+/** A short, playful label for how a player's season went. */
+export interface WrappedPersona {
+  title: string;
+  blurb: string;
+}
+
+/** A neighbour on the final standings, and the points between you. */
+export interface WrappedNeighbour {
+  player: Player;
+  rank: number;
+  gap: number;
+}
+
+/** One player's season, wrapped up. */
+export interface PlayerWrapped {
+  season: Season;
+  standing: LeaderboardRow;
+  persona: WrappedPersona;
+  playerCount: number;
+  weeksScored: number;
+  /** Players who finished below them. */
+  beaten: number;
+  podiums: number;
+  /** Their highest-scoring week (best finish, then earliest, on a tie). */
+  bestWeek?: PlayerTaskResult;
+  /** Their lowest finish, when it differs from their best week. */
+  toughestWeek?: PlayerTaskResult;
+  /** Peak rank, streaks, best climb and comeback as cards. */
+  highlights: Award[];
+  /** Season awards and streak titles they won (unnamed: they're theirs). */
+  awardsWon: Award[];
+  bonus: PlayerBonusSummary;
+  squad?: TeamStanding;
+  /** The player directly above on the final standings. */
+  chasing?: WrappedNeighbour;
+  /** The player directly below on the final standings. */
+  holdingOff?: WrappedNeighbour;
+  chart?: PointsChartData;
 }
 
 // ─── Weekly "episode" recap ──────────────────────────────────────────────
@@ -927,7 +1110,21 @@ export type NotificationKind =
   | "results-posted"
   | "rank-up"
   | "bonus-awarded"
-  | "points-deducted";
+  | "points-deducted"
+  | "sabotaged"
+  | "shielded"
+  | "reflected"
+  | "gift-received"
+  | "wish-granted"
+  | "wish-declined"
+  | "mini-task"
+  | "market-offer"
+  | "market-sold"
+  | "offer-accepted"
+  | "offer-declined"
+  | "listing-expired"
+  | "bounty-claimed"
+  | "bounty-won";
 
 /** One entry in a player's notification feed. */
 export interface NotificationItem {
@@ -987,7 +1184,8 @@ export interface TaskSubmission {
 
 /** Whose entry slots a submission uses: the player's, or their squad's. */
 export type SubmissionOwnerRef =
-  { type: "player"; id: string } | { type: "team"; id: string };
+  | { type: "player"; id: string }
+  | { type: "team"; id: string };
 
 /** A submission owner ready to render. */
 export interface SubmissionOwner {
@@ -1003,6 +1201,8 @@ export interface SubmissionEntry extends TaskSubmission {
   submitterName: string;
   /** Base-prefixed, access-checked image URL (photos only). */
   mediaUrl?: string;
+  /** How long before the task's deadline it came in (≤ 0 = at or after). */
+  msBeforeDeadline: number;
 }
 
 /** Who is looking at a task's submissions. */
@@ -1044,6 +1244,8 @@ export interface SubmissionPanel {
   blockedBy?: SubmissionBlockReason;
   /** Entries can still be withdrawn (the task is live). */
   canDelete: boolean;
+  /** Text entries and photo captions can still be edited (the task is live). */
+  canEdit: boolean;
 }
 
 /** One player's or squad's entries in a gallery. */
@@ -1068,6 +1270,7 @@ export interface SubmitterOptionGroup {
 /** What happened to a player's submission attempt (shown on the task page). */
 export type SubmissionOutcome =
   | "submitted"
+  | "edited"
   | "deleted"
   | "closed"
   | "full"
@@ -1153,6 +1356,8 @@ export interface GalleryEntrySocial {
   votes?: number;
   /** Won (or tied for) People's Choice. */
   winner: boolean;
+  /** The viewer's own entry (or their squad's). */
+  own: boolean;
 }
 
 /** A gallery entry with its reactions and People's Choice state. */
@@ -1181,7 +1386,8 @@ export type GalleryOutcome =
 
 /** Who a prediction backs: a player, or a squad on team tasks. */
 export type PredictionPick =
-  { type: "player"; id: string } | { type: "team"; id: string };
+  | { type: "player"; id: string }
+  | { type: "team"; id: string };
 
 /** A player's call on who wins a week (`predictions`). */
 export interface Prediction {
@@ -1239,7 +1445,11 @@ export interface PredictionPanel {
 
 /** What happened to a player's prediction (shown on the task page). */
 export type PredictionOutcome =
-  "saved" | "changed" | "withdrawn" | "closed" | "invalid";
+  | "saved"
+  | "changed"
+  | "withdrawn"
+  | "closed"
+  | "invalid";
 
 // ── Live results night ────────────────────────────────────────────────
 
@@ -1319,6 +1529,7 @@ export interface GameRules {
     maxTextChars: number;
     maxCaptionChars: number;
   };
+  coins: CoinRules;
 }
 
 // ── Seasons & Hall of Fame ───────────────────────────────────────────
@@ -1368,4 +1579,1746 @@ export interface HallOfFame {
   /** Closed seasons, most recent first. */
   seasons: HallOfFameSeason[];
   records: AllTimeRecord[];
+}
+
+/** Where one page sits within a longer, paginated list. */
+export interface PageInfo {
+  /** 1-based current page, clamped to the available pages. */
+  page: number;
+  /** Always at least 1, even for an empty list. */
+  pageCount: number;
+  pageSize: number;
+  total: number;
+  /** 1-based position of the first item shown (0 when the list is empty). */
+  from: number;
+  /** 1-based position of the last item shown (0 when the list is empty). */
+  to: number;
+}
+
+/** One page of a longer list. */
+export interface Page<T> extends PageInfo {
+  items: T[];
+}
+
+/** A slot in a pagination control: a page number, or a gap ("…"). */
+export type PageLinkSlot = number | "gap";
+
+// ── Feature flags ─────────────────────────────────────────────────────
+
+/** A site feature an admin can switch on or off (see `feature-flags.ts`). */
+export type FeatureFlagKey =
+  | "shop_eggs"
+  | "storm_mode"
+  | "skill_trees"
+  | "mini_tasks"
+  | "achievements"
+  | "marketplace"
+  | "bounties"
+  | "shop_deals"
+  | "shop_bundles"
+  | "shop_raffle"
+  | "shop_gift_wrap"
+  | "daily_bonus"
+  | "pool_bracket";
+
+/** Whether each feature is on. */
+export type FeatureFlags = Record<FeatureFlagKey, boolean>;
+
+/** A flag as the admin screen lists it. */
+export interface FeatureFlagView {
+  key: FeatureFlagKey;
+  label: string;
+  description: string;
+  enabled: boolean;
+  /** Who last changed it, and when (ISO 8601); unset if never changed. */
+  changedBy?: string;
+  changedAt?: string;
+}
+
+// ── Clim Coin ─────────────────────────────────────────────────────────
+
+export type ShopCategory = "pet" | "avatar" | "cosmetic" | "power_up";
+export type CosmeticKind =
+  | "title"
+  | "name_colour"
+  | "theme"
+  | "shell_prompt"
+  | "avatar_frame";
+/** Power-ups a player spends on a live week (a `power_up_uses` row). */
+export type ActivePowerUpKind =
+  | "double_down"
+  | "hint"
+  | "golden_week"
+  | "sabotage"
+  | "heist"
+  | "freeze"
+  | "spyglass"
+  | "coin_rush"
+  | "copycat";
+/** What a Copycat can copy: any active power-up but itself. */
+export type CopyablePowerUpKind = Exclude<ActivePowerUpKind, "copycat">;
+/** Active power-ups aimed at another player (they need a target). */
+export type TargetedPowerUpKind = "sabotage" | "heist" | "freeze" | "spyglass";
+/** Power-ups that work by themselves once bought (effects derived). */
+export type PassivePowerUpKind =
+  | "shield"
+  | "mirror"
+  | "insurance"
+  | "bounty_badge"
+  | "underdog";
+/** The One Wish Willow: spent by making a wish (a `wishes` row). */
+export type WishPowerUpKind = "wish";
+export type PowerUpKind =
+  | ActivePowerUpKind
+  | PassivePowerUpKind
+  | WishPowerUpKind;
+/** Whether the Taskmaster has answered a wish, and how. */
+export type WishStatus = "pending" | "granted" | "declined";
+/** Where an owned item is worn: one item per slot. */
+export type LoadoutSlot =
+  | "pet"
+  | "avatar"
+  | "title"
+  | "name_colour"
+  | "theme"
+  | "shell_prompt"
+  | "avatar_frame";
+/** Avatar frame cosmetics: a preset border drawn around the avatar. */
+export type AvatarFrame =
+  | "neon"
+  | "glitch"
+  | "gold"
+  | "ascii"
+  | "rainbow"
+  | "pumpkin";
+/** Name colour cosmetics: accent tokens, plus a few special effects. */
+export type NameColour =
+  | "acid"
+  | "amber"
+  | "magenta"
+  | "cyan"
+  | "gold"
+  | "pumpkin"
+  | "glitch"
+  | "rainbow"
+  // Skill tree capstone rewards (never sold in the shop).
+  | "storm"
+  | "hacker"
+  | "friendship"
+  | "platinum"
+  | "cartographer";
+/** Profile terminal themes a theme cosmetic may use. */
+export type ProfileTheme =
+  | "phosphor"
+  | "amber"
+  | "synthwave"
+  | "ice"
+  | "matrix"
+  | "vaporwave"
+  | "blueprint";
+
+/** An item in the (site-wide, admin-managed) shop catalogue. */
+export interface ShopItem {
+  id: string;
+  name: string;
+  description: string;
+  category: ShopCategory;
+  price: number;
+  /** Root-relative path or https URL. Always set for pets and avatars. */
+  imageUrl?: string;
+  /** Cosmetics only. */
+  cosmetic?: { kind: CosmeticKind; value: string };
+  /** Power-ups only. */
+  powerUp?: PowerUpKind;
+  /** Retired items stay with their owners but can't be bought. */
+  available: boolean;
+  /** Crate exclusive: only drops from crates, never sold directly. */
+  crateOnly: boolean;
+  /** Seasonal egg exclusive: only drops from this crate (by id). */
+  crateId?: string;
+  /** Skill tree reward: only granted by unlocking a skill node, never sold. */
+  skillOnly: boolean;
+  /** Limited-time stock: on sale from / until these instants (ISO 8601). */
+  availableFrom?: string;
+  availableUntil?: string;
+  /**
+   * Limited stock: how many the shop sells each season (direct purchases
+   * only; egg drops, gifts and resales don't count). Unset = unlimited.
+   */
+  stock?: number;
+  sortOrder: number;
+}
+
+/** How rare an item is, derived from its price (see `coin-rules.ts`). */
+export type Rarity = "common" | "rare" | "epic" | "legendary";
+/** A crate's tiers: the rarities, plus its small power-up chance. */
+export type CrateTierKind = Rarity | "power_up";
+
+/** A lootbox: what it costs and the chance of each rarity tier. */
+export interface Crate {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  /** Chance of each tier, out of 1 (tiers left out never drop). */
+  odds: Partial<Record<Rarity, number>>;
+  /**
+   * Chance (out of 1) of a power-up instead, taken off the top of the other
+   * tiers. It's never scaled up when tiers empty. Unset = never.
+   */
+  powerUpChance?: number;
+  /**
+   * A seasonal egg: drops only the items exclusive to it (`crateId`), which
+   * no other egg drops.
+   */
+  exclusive?: boolean;
+  /** On sale from / until these instants (ISO 8601); unset = always. */
+  availableFrom?: string;
+  availableUntil?: string;
+}
+
+/** A crate a player opened, and what it gave them. */
+export interface CrateOpen {
+  id: number;
+  /** The zero-price purchase that makes the player own the item. */
+  purchaseId: number;
+  playerId: string;
+  crateId: string;
+  price: number;
+  itemId: string;
+  rarity: CrateTierKind;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** One item's chance of dropping from a crate, for one viewer. */
+export interface CrateDrop {
+  item: ShopItem;
+  /** Out of 1. */
+  chance: number;
+}
+
+/** A rarity tier's share of a crate, and the items in it. */
+export interface CrateTier {
+  rarity: CrateTierKind;
+  /** Out of 1, after empty tiers are shared out. */
+  chance: number;
+  drops: CrateDrop[];
+}
+
+/** Why a viewer can't open a crate right now. */
+export type CrateBlock = "guest" | "empty" | "unaffordable" | "season-closed";
+
+/** A crate as one viewer sees it in the shop: their personal odds. */
+export interface CrateView {
+  crate: Crate;
+  /** What the viewer would pay, after their skill tree discounts. */
+  price: number;
+  tiers: CrateTier[];
+  /** Average shop value of one roll, in coins. */
+  averageValue: number;
+  blocked?: CrateBlock;
+}
+
+/** A crate opening, as the public "recent pulls" feed shows it. */
+export interface CratePull {
+  id: number;
+  player: Player;
+  crate: Crate;
+  item: ShopItem;
+  rarity: CrateTierKind;
+  at: string;
+}
+
+/** A purchase, at the price paid then. */
+export interface CoinPurchase {
+  id: number;
+  playerId: string;
+  itemId: string;
+  price: number;
+  /** Set on the copies a bundle gave (its price is on the bundle purchase). */
+  bundlePurchaseId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A power-up charge spent on a week. */
+export interface PowerUpUse {
+  id: number;
+  purchaseId: number;
+  playerId: string;
+  taskId: string;
+  /** The power-up spent (a Copycat acts as `copiedEffect`). */
+  effect: ActivePowerUpKind;
+  /** Copycat only: the power-up it copied, whose effect it has. */
+  copiedEffect?: CopyablePowerUpKind;
+  /** Sabotage, Heist, Freeze and Spyglass: who it was aimed at. */
+  targetPlayerId?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/**
+ * What a Sabotage or Heist did: hit its target, was blocked by their
+ * Shield, or was bounced back onto its user by their Mirror. Shields and
+ * Mirrors stay secret until the week's results are out.
+ */
+export type SabotageOutcome = "hit" | "blocked" | "reflected";
+
+/** How a Sabotage or Heist resolved, and the defence charge it used up. */
+export interface SabotageResolution {
+  outcome: SabotageOutcome;
+  /** The Shield or Mirror purchase that was spent on it. */
+  defencePurchaseId?: number;
+}
+
+/** Clim Coin one player sent another. */
+export interface CoinGift {
+  id: number;
+  fromPlayerId: string;
+  toPlayerId: string;
+  amount: number;
+  message?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+export interface EquippedItem {
+  playerId: string;
+  slot: LoadoutSlot;
+  itemId: string;
+}
+
+/** An admin grant (positive) or deduction (negative) of coins. */
+export interface CoinAdjustment {
+  id: number;
+  playerId: string;
+  amount: number;
+  reason: string;
+  actorName: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A shop item an admin gifted a player (owned through a free purchase). */
+export interface ItemGift {
+  id: number;
+  /** The zero-price purchase that makes the player own the item. */
+  purchaseId: number;
+  playerId: string;
+  itemId: string;
+  reason: string;
+  actorName: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A mystery egg an admin gifted a player, to crack from their inventory. */
+export interface EggGift {
+  id: number;
+  playerId: string;
+  /** The crate (egg) given, by id (see `coin-rules.ts`). */
+  crateId: string;
+  reason: string;
+  actorName: string;
+  /** The opening it hatched into, once cracked. */
+  crateOpenId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A gifted egg as the admin player page lists it. */
+export interface EggGiftView {
+  gift: EggGift;
+  crate: Crate;
+  /** What it hatched, once cracked (it can't be taken back then). */
+  hatched?: ShopItem;
+}
+
+/** A gifted egg still waiting in a player's inventory, with their odds. */
+export interface UnopenedEgg {
+  gift: EggGift;
+  /** The egg with the player's skill tree luck applied. */
+  crate: Crate;
+  tiers: CrateTier[];
+  /** Set when there's nothing left in it they don't own. */
+  blocked?: "empty";
+}
+
+/** A wish a player made with the One Wish Willow (private to them and admins). */
+export interface Wish {
+  id: number;
+  /** The Willow charge it spent. */
+  purchaseId: number;
+  playerId: string;
+  wish: string;
+  status: WishStatus;
+  /** The Taskmaster's reply, once decided. */
+  response?: string;
+  /** ISO 8601, once decided. */
+  decidedAt?: string;
+  /** The admin who decided it (shown only in the admin activity log). */
+  deciderName?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A player's first visible entry on a task (earns the entry payout). */
+export interface EntryActivity {
+  taskId: string;
+  playerId: string;
+}
+
+/** One weekly raffle ticket (its draw secret stays server-side). */
+export interface RaffleTicket {
+  id: number;
+  taskId: string;
+  playerId: string;
+  price: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A week's raffle, drawn once its deadline passed. */
+export interface RaffleDraw {
+  taskId: string;
+  winnerId: string;
+  /** Every ticket's price, paid to the winner. */
+  pot: number;
+  tickets: number;
+  /** When it was drawn: the week's deadline (ISO 8601). */
+  at: string;
+}
+
+/** The season's raffle tickets and the draws of weeks that have closed. */
+export interface RaffleData {
+  tickets: RaffleTicket[];
+  draws: RaffleDraw[];
+}
+
+/** A rename token: bought, then spent naming one of the player's pets. */
+export interface RenameToken {
+  id: number;
+  playerId: string;
+  price: number;
+  /** Once spent: the pet it named, and the name. */
+  itemId?: string;
+  name?: string;
+  /** ISO 8601, once spent. */
+  usedAt?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A shop item one player bought for another (gift wrap). */
+export interface WrappedGift {
+  id: number;
+  /** The zero-price purchase that makes the recipient own it. */
+  purchaseId: number;
+  fromPlayerId: string;
+  toPlayerId: string;
+  itemId: string;
+  /** What the sender paid for the item, and the wrap fee on top. */
+  price: number;
+  fee: number;
+  /** Hides the sender from the recipient. */
+  anonymous: boolean;
+  message?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** Shop items sold together for one price (admin-managed, site-wide). */
+export interface ShopBundle {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  available: boolean;
+  itemIds: string[];
+  sortOrder: number;
+}
+
+/** A bundle a player bought; its items are zero-price purchases. */
+export interface BundlePurchase {
+  id: number;
+  playerId: string;
+  bundleId: string;
+  price: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** An admin's pick for one week's deal, overriding the rotation. */
+export interface ShopDealOverride {
+  /** The week's Monday (UK date, YYYY-MM-DD). */
+  weekStart: string;
+  itemId: string;
+  discountPercent: number;
+  actorName: string;
+}
+
+/** Clim Coin records for one season's snapshot. */
+export interface ClimCoinData {
+  /** The whole catalogue, in display order (retired items included). */
+  items: ShopItem[];
+  purchases: CoinPurchase[];
+  uses: PowerUpUse[];
+  equipped: EquippedItem[];
+  adjustments: CoinAdjustment[];
+  entries: EntryActivity[];
+  /** Crates opened, oldest first. */
+  crateOpens: CrateOpen[];
+  /** Gifts between this season's players, oldest first. */
+  gifts: CoinGift[];
+  /** Items admins gifted this season's players, oldest first. */
+  itemGifts: ItemGift[];
+  /** Eggs admins gifted this season's players, oldest first. */
+  eggGifts: EggGift[];
+  /** Wishes this season's players made, oldest first. */
+  wishes: Wish[];
+  /** Taskmaster's Hints by task id; only shown to players who used Hint. */
+  hints: Record<string, string>;
+  /** The skill pathway each of this season's players committed to. */
+  skillPaths: SkillPathPick[];
+  /** Skill nodes this season's players unlocked, oldest first. */
+  skillUnlocks: SkillUnlock[];
+  /** This season's mini-tasks, newest start first. */
+  miniTasks: MiniTask[];
+  /** Who completed which mini-task, oldest first. */
+  miniTaskCompletions: MiniTaskCompletion[];
+  /** This season's daily bonus schedule, days 1–7 (defaults filled in). */
+  dailyBonusRewards: DailyBonusReward[];
+  /** Daily bonuses this season's players claimed, oldest first. */
+  dailyBonusClaims: DailyBonusClaim[];
+  /** The player-to-player marketplace, this season's rows, oldest first. */
+  market: MarketData;
+  /** Bounties this season's players posted, and their claims. */
+  bounties: BountyData;
+  /** Weekly raffle tickets and draws. */
+  raffle: RaffleData;
+  /** Rename tokens this season's players bought, oldest first. */
+  renameTokens: RenameToken[];
+  /** Items this season's players gift-wrapped for each other, oldest first. */
+  wrappedGifts: WrappedGift[];
+  /** The bundle catalogue (site-wide), in display order. */
+  bundles: ShopBundle[];
+  /** Bundles this season's players bought, oldest first. */
+  bundlePurchases: BundlePurchase[];
+  /** Admin overrides of the deal of the week (site-wide). */
+  dealOverrides: ShopDealOverride[];
+}
+
+// ── Marketplace ───────────────────────────────────────────────────────
+
+/**
+ * A listing's state. Stored `open` listings past their expiry read as
+ * `expired` (derived), so nothing has to run when they lapse.
+ */
+export type MarketListingStatus = "open" | "sold" | "cancelled" | "expired";
+/** An offer's state; a pending offer on a closed listing reads as `expired`. */
+export type MarketOfferStatus =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "withdrawn"
+  | "expired";
+
+/** One owned copy of an item for sale (the seller's purchase). */
+export interface MarketListing {
+  id: number;
+  sellerId: string;
+  /** The seller's `coin_purchases` row being sold. */
+  purchaseId: number;
+  itemId: string;
+  price: number;
+  /** As stored: an `open` one may have expired by age. */
+  status: MarketListingStatus;
+  /** Set when an admin cancelled it. */
+  cancelledByName?: string;
+  /** ISO 8601. */
+  at: string;
+  /** ISO 8601, once closed. */
+  closedAt?: string;
+}
+
+/** An offer below a listing's price (pending offers hold the coins). */
+export interface MarketOffer {
+  id: number;
+  listingId: number;
+  buyerId: string;
+  amount: number;
+  status: Exclude<MarketOfferStatus, "expired">;
+  /** ISO 8601. */
+  at: string;
+  decidedAt?: string;
+}
+
+/** A completed sale: the item and the coins changed hands. */
+export interface MarketSale {
+  id: number;
+  listingId: number;
+  sellerId: string;
+  buyerId: string;
+  itemId: string;
+  price: number;
+  /** The seller's copy, no longer theirs. */
+  sourcePurchaseId: number;
+  /** The zero-price purchase that makes the buyer own it. */
+  buyerPurchaseId: number;
+  /** Set when the sale was an accepted offer. */
+  offerId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+export interface MarketData {
+  listings: MarketListing[];
+  offers: MarketOffer[];
+  sales: MarketSale[];
+}
+
+// ── Bounties ──────────────────────────────────────────────────────────
+
+/** A bounty's stored state. */
+export type StoredBountyStatus = "open" | "awarded" | "cancelled";
+/** A bounty's state; an open one past its deadline reads as `expired`. */
+export type BountyStatus = StoredBountyStatus | "expired";
+
+/** A Clim Coin bounty a player put up (a `bounties` row). */
+export interface Bounty {
+  id: number;
+  posterId: string;
+  title: string;
+  details?: string;
+  reward: number;
+  status: StoredBountyStatus;
+  winnerId?: string;
+  /** Set when an admin awarded or cancelled it. */
+  resolvedByName?: string;
+  at: string;
+  closedAt?: string;
+}
+
+/** A player saying they did a bounty. */
+export interface BountyClaim {
+  id: number;
+  bountyId: number;
+  playerId: string;
+  note?: string;
+  at: string;
+}
+
+export interface BountyData {
+  /** Oldest first. */
+  bounties: Bounty[];
+  /** Oldest first. */
+  claims: BountyClaim[];
+}
+
+export interface BountyClaimView {
+  claim: BountyClaim;
+  player: Player;
+}
+
+/** A bounty as the board shows it. */
+export interface BountyView {
+  bounty: Bounty;
+  /** Derived (expiry applied). */
+  status: BountyStatus;
+  poster: Player;
+  winner?: Player;
+  /** When it lapses if nobody wins it. */
+  expiresAt: string;
+  /** Oldest first. */
+  claims: BountyClaimView[];
+}
+
+/** Why a player can't post a bounty right now. */
+export type BountyPostBlock =
+  | "guest"
+  | "disabled"
+  | "season-closed"
+  | "limit"
+  | "unaffordable";
+
+/** Why a player can't claim a bounty. */
+export type BountyClaimBlock =
+  | "guest"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "own-bounty";
+
+/** The bounty board: what's open and what's been settled. */
+export interface BountyBoard {
+  /** Open bounties, biggest reward first. */
+  open: BountyView[];
+  /** Awarded, cancelled and lapsed bounties, newest first. */
+  settled: BountyView[];
+}
+
+/** What a player can do about posting a bounty. */
+export interface BountyPostPanel {
+  blocked?: BountyPostBlock;
+  /** Coins they can put up now (signed-in players only). */
+  available?: number;
+  /** Their open bounties. */
+  openCount: number;
+}
+
+/** One bounty as a viewer sees it. */
+export interface BountyDetail {
+  view: BountyView;
+  isPoster: boolean;
+  claimBlocked?: BountyClaimBlock;
+  myClaim?: BountyClaim;
+  /** The poster can pick a winner (it's open and has claims). */
+  canAward: boolean;
+  /** The poster can take it down (it's open and nobody's claimed it). */
+  canCancel: boolean;
+}
+
+/** Outcome of a bounty action, shown after the redirect. */
+export type BountyOutcome =
+  | "posted"
+  | "cancelled"
+  | "claimed"
+  | "unclaimed"
+  | "awarded"
+  | "invalid"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "own-bounty"
+  | "has-claims"
+  | "limit"
+  | "unaffordable";
+
+// ── Clim Coin economy (admin dashboard) ───────────────────────────────
+
+/**
+ * How a ledger line moves coins through the economy: `earned` and
+ * `granted` bring coins in, `spent` takes them out of circulation, and
+ * `moved` passes them between players (net zero across the season).
+ */
+export type EconomyFlow = "earned" | "granted" | "spent" | "moved";
+
+/** Where coins came from or went, e.g. task placements or crates. */
+export type EconomySource =
+  | "placements"
+  | "entries"
+  | "votes"
+  | "mini-tasks"
+  | "daily-bonus"
+  | "skill-perks"
+  | "power-ups"
+  | "grants"
+  | "deductions"
+  | "shop"
+  | "crates"
+  | "skills"
+  | "gifts"
+  | "market"
+  | "bounties"
+  | "raffle";
+
+export interface EconomySourceRow {
+  source: EconomySource;
+  flow: EconomyFlow;
+  label: string;
+  /** Coins through this source (always positive; `flow` gives direction). */
+  amount: number;
+  /** Ledger lines behind it. */
+  count: number;
+}
+
+/** One week of the coin supply, Monday to Sunday (UK). */
+export interface EconomyWeek {
+  /** The Monday the week starts (ISO date, `YYYY-MM-DD`). */
+  weekStart: string;
+  /** Coins earned and granted that week. */
+  minted: number;
+  /** Coins spent (and deducted) that week. */
+  burned: number;
+  /** Coins in circulation at the end of the week. */
+  circulating: number;
+}
+
+export interface EconomyHolder {
+  player: Player;
+  /** What they can spend now. */
+  balance: number;
+  /** Held by their offers and bounties. */
+  held: number;
+}
+
+/** A shop item's sales this season. */
+export interface EconomyShopRow {
+  item: ShopItem;
+  /** Copies bought from the shop (not eggs, gifts, skills or resales). */
+  sold: number;
+  revenue: number;
+  /** Limited-stock items only. */
+  stockLeft?: number;
+  onSale: boolean;
+}
+
+/** A mystery egg's sales this season. */
+export interface EconomyCrateRow {
+  crateId: string;
+  name: string;
+  opened: number;
+  revenue: number;
+}
+
+/** The season's Clim Coin economy, for `/admin/economy`. */
+export interface EconomyReport {
+  /** Coins players hold: spendable plus held. */
+  circulating: number;
+  /** Of which held by open offers and bounties. */
+  held: number;
+  minted: number;
+  burned: number;
+  /** Coins passed between players (gifts, market, bounties). */
+  moved: number;
+  /** Biggest first within each flow. */
+  sources: EconomySourceRow[];
+  /** Oldest first, from the first week with any coin activity. */
+  weeks: EconomyWeek[];
+  /** Richest first. */
+  holders: EconomyHolder[];
+  /** Best-selling first; only items that sold or are on sale. */
+  shop: EconomyShopRow[];
+  crates: EconomyCrateRow[];
+}
+
+/** How the market page orders open listings. */
+export type MarketSort = "newest" | "price-asc" | "price-desc";
+
+/** The prices an item may be listed at or offered for, inclusive. */
+export interface MarketPriceRange {
+  min: number;
+  max: number;
+}
+
+/** A listing as the market shows it. */
+export interface MarketListingView {
+  listing: MarketListing;
+  /** Derived (expiry applied). */
+  status: MarketListingStatus;
+  item: ShopItem;
+  seller: Player;
+  /** When it lapses if unsold (ISO 8601). */
+  expiresAt: string;
+  range: MarketPriceRange;
+  /** Live pending offers. */
+  offerCount: number;
+  bestOffer?: number;
+  /** Set once sold. */
+  sale?: MarketSaleView;
+}
+
+/** A sale as the recent-sales feed and price history show it. */
+export interface MarketSaleView {
+  sale: MarketSale;
+  item: ShopItem;
+  seller: Player;
+  buyer: Player;
+}
+
+/** An offer with who made it and the listing it's on. */
+export interface MarketOfferView {
+  offer: MarketOffer;
+  /** Derived (expired once its listing closes or lapses). */
+  status: MarketOfferStatus;
+  buyer: Player;
+  listing: MarketListingView;
+}
+
+/** Why a viewer can't buy a listing or make an offer on it. */
+export type MarketBuyBlock =
+  | "guest"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "own-listing"
+  /** They already hold the item (power-ups: a charge of that effect). */
+  | "owned"
+  /** Offers only: it's listed at the lowest price allowed. */
+  | "no-offers"
+  | "unaffordable";
+
+/** Why an owned copy can't be listed. */
+export type MarketListBlock =
+  | "disabled"
+  | "season-closed"
+  /** Skill tree rewards and passive power-ups. */
+  | "untradeable"
+  /** A power-up charge already used (or a wish already made). */
+  | "spent";
+
+/** One listing's page, as one viewer sees it. */
+export interface MarketListingDetail {
+  view: MarketListingView;
+  /** Earlier sales of the same item this season, newest first. */
+  history: MarketSaleView[];
+  buyBlocked?: MarketBuyBlock;
+  offerBlocked?: MarketBuyBlock;
+  /** The viewer's pending offer on it. */
+  myOffer?: MarketOfferView;
+  /** Live offers, highest first: only for the seller. */
+  offers: MarketOfferView[];
+  /** What the viewer can spend now (after held offers). */
+  available?: number;
+}
+
+/** An owned copy a player could list, and its listing if it's on sale. */
+export interface ListableItem {
+  purchaseId: number;
+  item: ShopItem;
+  range: MarketPriceRange;
+  /** Its live listing, if listed. */
+  listing?: MarketListingView;
+  blocked?: MarketListBlock;
+}
+
+/** A player's side of the market (the account page). */
+export interface PlayerMarket {
+  /** Their listings, newest first (every state). */
+  listings: MarketListingView[];
+  /** Offers they made, newest first. */
+  offersMade: MarketOfferView[];
+  /** Live offers on their open listings, newest first. */
+  offersReceived: MarketOfferView[];
+  /** What they own that could go on sale. */
+  listable: ListableItem[];
+  /** Coins held by their pending offers (and open bounties). */
+  held: number;
+}
+
+/** Outcome of a market action, shown after the redirect. */
+export type MarketOutcome =
+  | "listed"
+  | "cancelled"
+  | "bought"
+  | "offered"
+  | "withdrawn"
+  | "accepted"
+  | "declined"
+  | "invalid"
+  | "disabled"
+  | "season-closed"
+  | "closed"
+  | "owned"
+  | "unaffordable"
+  | "out-of-range"
+  | "untradeable"
+  | "spent";
+
+/** The payout table, as `/rules` and the shop explain it. */
+export interface CoinRules {
+  placement: { first: number; second: number; third: number; scored: number };
+  entry: number;
+  pollVote: number;
+  peoplesChoiceVote: number;
+  prediction: number;
+  goldenWeekMultiplier: number;
+  doubleDownPoints: number;
+  sabotagePoints: number;
+  /** Points a Heist moves from its target to its user. */
+  heistPoints: number;
+  /** Coin Rush multiplies a week's coins by this. */
+  coinRushMultiplier: number;
+  /** Bounty Badge: extra share of the next bounty won, as a percentage. */
+  bountyBadgePercent: number;
+  /** Underdog's bonus points. */
+  underdogPoints: number;
+  /** The most coins a player can gift in any 7 days. */
+  giftWeeklyCap: number;
+}
+
+export type CoinLedgerKind =
+  | "placement"
+  | "entry"
+  | "poll-vote"
+  | "peoples-choice-vote"
+  | "prediction"
+  | "adjustment"
+  | "purchase"
+  | "crate"
+  | "gift-in"
+  | "gift-out"
+  | "item-gift"
+  /** Coins spent unlocking a skill node. */
+  | "skill"
+  /** Extra coins from a skill node's earning perk. */
+  | "skill-perk"
+  /** A mini-task an admin marked as completed. */
+  | "mini-task"
+  /** A daily sign-in bonus claimed. */
+  | "daily-bonus"
+  /** Coins from selling an item on the marketplace. */
+  | "market-sale"
+  /** Coins spent buying an item on the marketplace. */
+  | "market-buy"
+  /** A bounty's reward, paid by its poster when they award it. */
+  | "bounty-paid"
+  /** A bounty's reward, won. */
+  | "bounty-won"
+  /** Coin Rush's extra coins on a week. */
+  | "coin-rush"
+  /** Bounty Badge's extra coins on a bounty won. */
+  | "bounty-badge"
+  /** Raffle tickets bought. */
+  | "raffle"
+  /** A week's raffle pot, won. */
+  | "raffle-win"
+  /** A rename token bought. */
+  | "rename"
+  /** An item gift-wrapped for someone else (price plus fee). */
+  | "gift-wrap-out"
+  /** An item someone gift-wrapped for this player (free). */
+  | "gift-wrap-in"
+  /** A bundle bought. */
+  | "bundle";
+
+/** One line in a wallet's history. */
+export interface CoinLedgerEntry {
+  kind: CoinLedgerKind;
+  /** Coins in (positive) or out (negative). */
+  amount: number;
+  label: string;
+  /** When the coins landed (ISO 8601). */
+  at: string;
+  taskId?: string;
+}
+
+/** A player's Clim Coin balance and history. */
+export interface Wallet {
+  playerId: string;
+  /** What they can spend now: everything below, less `held`. */
+  balance: number;
+  earned: number;
+  adjusted: number;
+  spent: number;
+  /** Gifts received minus gifts sent. */
+  gifted: number;
+  /** Marketplace sales minus marketplace buys. */
+  traded: number;
+  /** Bounty rewards won minus bounty rewards paid out. */
+  bountied: number;
+  /** Coins held by their pending marketplace offers and open bounties. */
+  held: number;
+  /** Newest first. */
+  ledger: CoinLedgerEntry[];
+}
+
+/** What a player is wearing (only items they still own). */
+export interface PlayerLoadout {
+  pet?: ShopItem;
+  /** The pet's custom name (from a rename token), if any. */
+  petName?: string;
+  avatar?: ShopItem;
+  title?: string;
+  nameColour?: NameColour;
+  theme?: ProfileTheme;
+  /** Their shell prompt, with `{name}` filled in. */
+  shellPrompt?: string;
+  avatarFrame?: AvatarFrame;
+}
+
+/** An item an admin gifted a player, as the admin player page lists it. */
+export interface ItemGiftView {
+  gift: ItemGift;
+  item: ShopItem;
+  /**
+   * A power-up charge that's been spent (used on a week, or a passive one
+   * triggered): revoking it would rewrite results, so it's kept.
+   */
+  spent: boolean;
+}
+
+/** Items an admin can gift a player, grouped by shop category. */
+export interface GiftableItemGroup {
+  category: ShopCategory;
+  label: string;
+  items: ShopItem[];
+}
+
+/** An owned item in a player's inventory. */
+export interface InventoryItem {
+  item: ShopItem;
+  /** Unset for power-ups, which are used rather than equipped. */
+  slot?: LoadoutSlot;
+  equipped: boolean;
+  /** Power-ups: unused charges. */
+  charges: number;
+  /** Set while (one copy of) it's on the marketplace: it can't be worn. */
+  listingId?: number;
+}
+
+/** Why a shop item can't be bought right now. */
+export type PurchaseBlock =
+  | "guest"
+  | "owned"
+  /** Power-ups: bought and already used this season. */
+  | "used"
+  /** Crate exclusives: never sold directly. */
+  | "crate-only"
+  /** Skill tree rewards: only unlocked through a skill node. */
+  | "skill-only"
+  | "unaffordable"
+  | "unavailable"
+  /** Limited stock: this season's run has all been bought. */
+  | "sold-out"
+  | "season-closed";
+
+/** A catalogue item as one viewer sees it in the shop. */
+export interface ShopListing {
+  item: ShopItem;
+  /** What the viewer would pay, after their skill tree discounts. */
+  price: number;
+  /** Already bought (power-ups: this season, used or not). */
+  owned: boolean;
+  /** Power-ups: unused charges held. */
+  charges: number;
+  /** Limited stock: how many the shop has left this season. */
+  remaining?: number;
+  /** This week's deal: the discount off, and what it costs without it. */
+  deal?: { percent: number; fullPrice: number };
+  /** Why it can't be bought; unset when it can. */
+  blocked?: PurchaseBlock;
+}
+
+export interface ShopSection {
+  category: ShopCategory;
+  label: string;
+  command: string;
+  listings: ShopListing[];
+}
+
+/** A power-up used on a week, as the task page's feed shows it. */
+export interface PowerUpFeedEntry {
+  id: number;
+  taskId: string;
+  effect: ActivePowerUpKind;
+  /** Copycat only: what it copied. */
+  copiedEffect?: CopyablePowerUpKind;
+  label: string;
+  player: Player;
+  target?: Player;
+  /** Sabotage/Heist only, once the week's results reveal Shields and Mirrors. */
+  outcome?: SabotageOutcome;
+  at: string;
+}
+
+/** Why a player can't use a power-up on a week right now. */
+export type PowerUpBlock =
+  | "no-charge"
+  | "not-live"
+  | "already-used"
+  | "no-prediction"
+  | "no-hint"
+  | "season-closed"
+  /** Someone used Freeze on them this week. */
+  | "frozen"
+  /** Copycat: nobody else used a power-up it can copy last week. */
+  | "nothing-to-copy"
+  /** Sabotage, Heist, Freeze or Spyglass: nobody left to aim it at. */
+  | "no-targets";
+
+/** A power-up a player could use on the live week. */
+export interface PowerUpOption {
+  effect: ActivePowerUpKind;
+  label: string;
+  description: string;
+  charges: number;
+  blocked?: PowerUpBlock;
+}
+
+/** A power-up Copycat can copy: one someone else used last week. */
+export interface CopycatChoice {
+  effect: CopyablePowerUpKind;
+  label: string;
+  /** Who used it last week. */
+  usedBy: Player[];
+}
+
+/** What a player's Spyglass saw when they used it (private to them). */
+export interface SpyglassReport {
+  useId: number;
+  taskId: string;
+  target: Player;
+  shield: boolean;
+  mirror: boolean;
+  at: string;
+}
+
+/** The wallet page's "use a power-up" panel for the live week. */
+export interface PowerUpPanel {
+  task?: Task;
+  /** The power-up already used on `task`, if any. */
+  used?: PowerUpFeedEntry;
+  options: PowerUpOption[];
+  /** Who each targeted power-up can be aimed at this week. */
+  targets: Record<TargetedPowerUpKind, Player[]>;
+  /** What Copycat can copy this week. */
+  copyable: CopycatChoice[];
+  /** Who froze the player this week, if anyone did. */
+  frozenBy?: Player;
+  /** Everything the player's Spyglass has seen this season, newest first. */
+  spyglass: SpyglassReport[];
+}
+
+/** Why a player can't make a wish right now. */
+export type WishBlock = "season-closed" | "no-charge";
+
+/** The wallet's One Wish Willow panel. */
+export interface WishPanel {
+  /** Unused Willow charges the player holds. */
+  charges: number;
+  blocked?: WishBlock;
+  /** The player's wishes, newest first. */
+  wishes: Wish[];
+}
+
+/** A wish as the admin dashboard lists it (any season). */
+export interface AdminWish {
+  id: number;
+  playerId: string;
+  playerName: string;
+  wish: string;
+  status: WishStatus;
+  response?: string;
+  deciderName?: string;
+  /** ISO 8601, once decided. */
+  decidedAt?: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** Outcome of a wallet action, shown after the redirect. */
+export type CoinOutcome =
+  | "bought"
+  | "opened"
+  | "crate-empty"
+  | "owned"
+  | "unaffordable"
+  | "unavailable"
+  | "sold-out"
+  | "season-closed"
+  | "equipped"
+  | "unequipped"
+  | "used"
+  | "invalid"
+  | "already-used"
+  | "already-sabotaged"
+  | "no-prediction"
+  | "no-hint"
+  | "not-live"
+  | "no-charge"
+  | "gifted"
+  | "gift-limit"
+  | "wished"
+  /** Someone froze the player this week. */
+  | "frozen"
+  /** Freeze: the target has already used a power-up this week. */
+  | "target-used"
+  | "tickets-bought"
+  /** Over the weekly raffle ticket limit. */
+  | "raffle-limit"
+  /** No raffle running (no live week) or the flag is off. */
+  | "raffle-closed"
+  | "token-bought"
+  | "renamed"
+  /** No unspent rename token to spend. */
+  | "no-token"
+  | "wrapped"
+  /** Gift wrap: the recipient already has that item. */
+  | "recipient-owns"
+  | "bundle-bought"
+  /** A shop feature behind a flag that's off. */
+  | "disabled";
+
+/** Why a player can't send a gift right now. */
+export type GiftBlock =
+  | "season-closed"
+  | "limit"
+  | "unaffordable"
+  | "no-recipients";
+
+/** The wallet's "send coins" form. */
+export interface GiftPanel {
+  /** Everyone else in the player's season. */
+  recipients: Player[];
+  /** The most anyone can send in any 7 days. */
+  cap: number;
+  /** What's left of the cap now (gifts sent in the last 7 days count). */
+  allowance: number;
+  /** The most they can send now: the allowance, or their balance if lower. */
+  max: number;
+  blocked?: GiftBlock;
+}
+
+/** A player's cosmetics as public lists show them. */
+export interface PlayerFlair {
+  /** `name` is the pet's custom name, if they gave it one. */
+  pet?: { name: string; imageUrl: string };
+  title?: string;
+  nameColour?: NameColour;
+  /** The skill pathway they committed to (shown as its sigil). */
+  skillPath?: Pick<SkillPath, "id" | "name" | "accent">;
+}
+
+// ── Shop extras (deal, bundles, raffle, rename tokens, gift wrap) ─────
+
+/** This week's deal: one shop item at a discount. */
+export interface ShopDeal {
+  listing: ShopListing;
+  discountPercent: number;
+  /** The item's undiscounted price (for the viewer, after skill perks). */
+  fullPrice: number;
+  /** When the deal week started and ends (ISO 8601). */
+  startsAt: string;
+  endsAt: string;
+  /** False when an admin picked it. */
+  automatic: boolean;
+}
+
+/** Why a viewer can't buy a bundle right now. */
+export type BundleBlock =
+  | "guest"
+  /** They already have one of its items (or its power-up effect). */
+  | "owned"
+  | "unavailable"
+  | "sold-out"
+  | "unaffordable"
+  | "season-closed";
+
+/** A bundle as one viewer sees it in the shop. */
+export interface BundleView {
+  bundle: ShopBundle;
+  items: ShopItem[];
+  /** What its items cost bought one by one, at full price. */
+  value: number;
+  blocked?: BundleBlock;
+}
+
+/** Why a player can't buy raffle tickets right now. */
+export type RaffleBlock =
+  | "guest"
+  | "no-week"
+  | "limit"
+  | "unaffordable"
+  | "season-closed";
+
+/** A drawn raffle, with names. */
+export interface RaffleDrawView {
+  task: Task;
+  winner: Player;
+  pot: number;
+  tickets: number;
+  at: string;
+}
+
+/** The shop's raffle panel for one viewer. */
+export interface RafflePanel {
+  /** The week tickets are on sale for (the live week). */
+  task?: Task;
+  ticketPrice: number;
+  maxTickets: number;
+  /** The viewer's tickets this week, and everyone's. */
+  myTickets: number;
+  totalTickets: number;
+  pot: number;
+  /** How many more the viewer can buy now (0 when blocked). */
+  canBuy: number;
+  blocked?: RaffleBlock;
+  /** Past draws, newest first. */
+  draws: RaffleDrawView[];
+}
+
+/** One of a player's pets, with the custom name they gave it (if any). */
+export interface NameablePet {
+  item: ShopItem;
+  customName?: string;
+}
+
+/** Why a player can't buy or spend a rename token right now. */
+export type RenameBlock = "guest" | "unaffordable" | "season-closed";
+
+/** The shop's rename token panel for one viewer. */
+export interface RenamePanel {
+  price: number;
+  /** Unspent tokens held. */
+  tokens: number;
+  pets: NameablePet[];
+  blocked?: RenameBlock;
+}
+
+/** Why a player can't gift-wrap right now. */
+export type GiftWrapBlock =
+  | "guest"
+  | "no-recipients"
+  | "nothing-to-wrap"
+  | "season-closed";
+
+/** The shop's gift wrap panel for one viewer. */
+export interface GiftWrapPanel {
+  fee: number;
+  recipients: Player[];
+  /** Items they can buy for someone, at what they'd pay (fee not included). */
+  items: { item: ShopItem; price: number }[];
+  blocked?: GiftWrapBlock;
+}
+
+/** A gift-wrapped item as the recipient's wallet shows it. */
+export interface WrappedGiftView {
+  gift: WrappedGift;
+  item: ShopItem;
+  /** Unset when the sender stayed anonymous. */
+  from?: Player;
+}
+
+/** The shop's tabs. */
+export type ShopTab =
+  | "featured"
+  | "eggs"
+  | "power-ups"
+  | "cosmetics"
+  | "pets"
+  | "extras";
+
+// ── Skill trees ───────────────────────────────────────────────────────
+
+/** The skill pathways (see `src/data/skill-trees.ts`). */
+export type SkillPathId =
+  | "stormbrewer"
+  | "elite-hacker"
+  | "friendkeeper"
+  | "overachiever"
+  | "elephant-cartographer";
+
+/** Earnings an `earn_bonus` perk adds to. */
+export type SkillEarnSource =
+  | "placement"
+  | "entry"
+  | "prediction"
+  | "poll-vote"
+  | "peoples-choice-vote"
+  | "power-up-use";
+
+/**
+ * What a skill node does for its owner. Perks only ever touch Clim Coin
+ * (never leaderboard points).
+ */
+export type SkillPerk =
+  /** Extra coins on every earning of `source` that lands after the unlock. */
+  | { kind: "earn_bonus"; source: SkillEarnSource; amount: number }
+  /** Coins off power-ups (all of them, or just `powerUps`). */
+  | { kind: "power_up_discount"; amount: number; powerUps?: PowerUpKind[] }
+  /** Coins off every item in the shop `categories` (not power-ups). */
+  | { kind: "shop_discount"; amount: number; categories: ShopCategory[] }
+  /** Coins off every egg. */
+  | { kind: "egg_discount"; amount: number }
+  /** Odds (out of 1) moved from an egg's commonest tier to the next one up. */
+  | { kind: "egg_luck"; amount: number }
+  /** Extra coins a player may gift in any 7 days. */
+  | { kind: "gift_cap"; amount: number };
+
+/** One node in a skill tree. */
+export interface SkillNode {
+  /** Unique across every pathway (it's stored on unlocks). */
+  id: string;
+  pathId: SkillPathId;
+  name: string;
+  /** A line of flavour; what it does is listed from `perks`. */
+  description: string;
+  /**
+   * The node's row in its tree, root first: 1 = root, 2 = branches,
+   * 3 = their spurs, 4 = the tips and the capstone.
+   */
+  tier: 1 | 2 | 3 | 4;
+  price: number;
+  /** Node ids (in the same pathway) that must be unlocked first. */
+  requires: string[];
+  perks: SkillPerk[];
+  /** A skill-only shop item the node grants (title or name colour). */
+  rewardItemId?: string;
+}
+
+/** A themed skill tree a player can commit to for the season. */
+export interface SkillPath {
+  id: SkillPathId;
+  name: string;
+  /** The squad it's a nod to. */
+  inspiredBy: string;
+  /** Short tagline. */
+  motto: string;
+  description: string;
+  /** Accent token the pathway is drawn in. */
+  accent: "acid" | "amber" | "magenta" | "cyan" | "gold";
+  nodes: SkillNode[];
+}
+
+/** The pathway a player committed to (once a season). */
+export interface SkillPathPick {
+  playerId: string;
+  pathId: SkillPathId;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A skill node a player unlocked, at the price paid then. */
+export interface SkillUnlock {
+  id: number;
+  playerId: string;
+  pathId: SkillPathId;
+  nodeId: string;
+  price: number;
+  /** The zero-price purchase that grants the node's reward item, if any. */
+  purchaseId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A player's skill perks added up. */
+export interface SkillPerks {
+  /** Extra coins per earning, by source. */
+  earn: Partial<Record<SkillEarnSource, number>>;
+  /** Coins off every power-up. */
+  powerUpDiscount: number;
+  /** Extra coins off particular power-ups. */
+  powerUpDiscounts: Partial<Record<PowerUpKind, number>>;
+  /** Coins off pets, avatars and cosmetics, by category. */
+  shopDiscounts: Partial<Record<ShopCategory, number>>;
+  eggDiscount: number;
+  eggLuck: number;
+  giftCap: number;
+}
+
+/** Why a viewer can't unlock a skill node right now. */
+export type SkillBlock =
+  | "guest"
+  | "season-closed"
+  | "unlocked"
+  | "other-path"
+  | "locked"
+  | "unaffordable";
+
+/** A skill node as one viewer sees it. */
+export interface SkillNodeView {
+  node: SkillNode;
+  unlocked: boolean;
+  /** Why it can't be unlocked; unset when it can. */
+  blocked?: SkillBlock;
+  /** Prerequisites still to unlock. */
+  missing: SkillNode[];
+  reward?: ShopItem;
+}
+
+/** A pathway as one viewer sees it. */
+export interface SkillPathView {
+  path: SkillPath;
+  /** The viewer committed to this pathway. */
+  chosen: boolean;
+  /** Nodes by tier, root first. */
+  tiers: SkillNodeView[][];
+  unlockedCount: number;
+  /** Coins to unlock the whole tree. */
+  totalCost: number;
+}
+
+/** The `/skills` page for one viewer. */
+export interface SkillTreesView {
+  paths: SkillPathView[];
+  chosen?: SkillPath;
+  /** The viewer's balance, when they're a player this season. */
+  balance?: number;
+  perks?: SkillPerks;
+}
+
+/** A player's pathway and progress, for their profile. */
+export interface PlayerSkills {
+  path: SkillPath;
+  unlocked: SkillNode[];
+  /** Nodes in the pathway. */
+  total: number;
+}
+
+/** A player's skill tree record, as the admin player page lists it. */
+export interface SkillLog {
+  path?: SkillPath;
+  /** Oldest first. */
+  unlocks: { node: SkillNode; price: number; at: string }[];
+}
+
+/** Outcome of unlocking a skill node, shown after the redirect. */
+export type SkillOutcome =
+  | "unlocked"
+  | "unaffordable"
+  | "locked"
+  | "owned"
+  | "other-path"
+  | "season-closed"
+  | "unavailable"
+  | "invalid";
+
+// ── Mini-tasks ────────────────────────────────────────────────────────
+
+/** Where a mini-task's window is relative to today (UK dates). */
+export type MiniTaskStatus = "upcoming" | "active" | "ended";
+
+/** A small daily or bonus challenge worth a little Clim Coin. */
+export interface MiniTask {
+  id: number;
+  title: string;
+  description?: string;
+  /** Clim Coin paid to each player who completes it (1–5). */
+  reward: number;
+  /** First and last day it runs (YYYY-MM-DD, UK, inclusive). */
+  startsOn: string;
+  endsOn: string;
+  status: MiniTaskStatus;
+}
+
+/** A player an admin marked as having completed a mini-task. */
+export interface MiniTaskCompletion {
+  miniTaskId: number;
+  playerId: string;
+  actorName: string;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** A mini-task as a player sees it, with whether they've done it. */
+export interface MiniTaskView {
+  task: MiniTask;
+  completed: boolean;
+  /** When it was ticked off for them (ISO 8601). */
+  completedAt?: string;
+  /** How many players have completed it. */
+  completions: number;
+}
+
+/** The mini-tasks panel: what's on now and coming up, and a player's tally. */
+export interface MiniTaskBoard {
+  /** Running today, soonest-ending first. */
+  active: MiniTaskView[];
+  /** Starting later, soonest first. */
+  upcoming: MiniTaskView[];
+  /** Mini-tasks the player has completed this season. */
+  completedCount: number;
+  /** Clim Coin those completions paid. */
+  coinsEarned: number;
+}
+
+// ── Daily sign-in bonus ───────────────────────────────────────────────
+
+/** What one day of the 7-day daily bonus cycle pays. */
+export interface DailyBonusReward {
+  /** Position in the streak cycle (1–7). */
+  day: number;
+  coins: number;
+  /** A shop item given with the coins (swapped for coins if owned). */
+  itemId?: string;
+  /** A mystery egg (crate id) given with the coins. */
+  crateId?: string;
+}
+
+/** A daily bonus a player claimed. */
+export interface DailyBonusClaim {
+  id: number;
+  playerId: string;
+  /** The UK date it was claimed for (YYYY-MM-DD). */
+  claimedOn: string;
+  /** Where it fell in the streak cycle (1–7). */
+  day: number;
+  /** Coins it paid, including any swap for an item already owned. */
+  coins: number;
+  /** The item gift it gave, if any (unset once revoked). */
+  itemGiftId?: number;
+  /** The egg gift it gave, if any (unset once revoked). */
+  eggGiftId?: number;
+  /** ISO 8601. */
+  at: string;
+}
+
+/** Where a player's streak stands today. */
+export interface DailyBonusStreak {
+  /** The cycle day today's claim is (or was), 1–7. */
+  day: number;
+  claimedToday: boolean;
+  /** Consecutive days claimed up to today (0 once broken). */
+  streak: number;
+}
+
+/** One day of the cycle as a player sees it. */
+export interface DailyBonusDayView {
+  reward: DailyBonusReward;
+  item?: ShopItem;
+  crate?: Crate;
+  state: "claimed" | "today" | "upcoming";
+}
+
+/** The daily bonus panel on a player's account page. */
+export interface DailyBonusPanel {
+  streak: DailyBonusStreak;
+  /** Days 1–7 of the cycle. */
+  days: DailyBonusDayView[];
+  /** What today's claim gave, once claimed. */
+  claimed?: { coins: number; item?: ShopItem; crate?: Crate };
+  blocked?: "season-closed";
+}
+
+/** Outcome of claiming the daily bonus, shown after the redirect. */
+export type DailyBonusOutcome =
+  | "claimed"
+  | "already-claimed"
+  | "season-closed"
+  | "disabled"
+  | "invalid";
+
+// ── Admin activity log ────────────────────────────────────────────────
+
+/** The kinds of change the admin activity log lists. */
+export type ActivityKind =
+  | "score"
+  | "coin-adjustment"
+  | "item-gift"
+  | "mini-task"
+  | "daily-bonus"
+  | "purchase"
+  | "crate"
+  | "gift"
+  | "power-up"
+  | "skill"
+  | "wish"
+  | "market"
+  | "bounty"
+  /** Bundles, gift wrap, rename tokens and the raffle. */
+  | "shop-extra";
+
+/** One line in the admin activity log. */
+export interface ActivityEntry {
+  /** Unique within the log (kind + source row id). */
+  id: string;
+  kind: ActivityKind;
+  /** ISO 8601. */
+  at: string;
+  /** Who made the change: an admin's name, or the player who acted. */
+  actor: string;
+  /** Whether `actor` is an admin (rather than the player themselves). */
+  byAdmin: boolean;
+  /** Player or squad ids the change affected, for filtering. */
+  subjectIds: string[];
+  /** Plain-text description, e.g. "Week 03 score · Sam: 4 → 5". */
+  summary: string;
+  /** Extra context: a reason, note or before/after detail. */
+  detail?: string;
+  /** Coins moved, when the change was about Clim Coin (signed). */
+  coins?: number;
+  /** Root-relative admin link to where the change can be inspected. */
+  href?: string;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createNotificationQueries } from "./notification-queries";
-import { at, competitionData, poll, task } from "../test/fixtures";
+import { at, competitionData, poll, shopItem, task } from "../test/fixtures";
 import type {
   CompetitionData,
   NotificationItem,
@@ -428,6 +428,266 @@ describe("getNotifications", () => {
         ["task:week-01", false],
       ]);
       expect(unreadCount).toBe(1);
+    });
+  });
+
+  describe("sabotages", () => {
+    const sabotage = {
+      id: 7,
+      taskId: "week-02",
+      effect: "sabotage" as const,
+      label: "sabotaged Ann",
+      player: { id: "bob", seasonId: "cohort-2026", name: "Bob" },
+      at: "2026-06-30T09:00:00.000Z",
+    };
+    const feed = (now = NOW) =>
+      createNotificationQueries(
+        competitionData({ tasks: [week1, week2, week3] }),
+        {
+          getPlayerRankHistory: () => [],
+          getSabotagesOf: (id) => (id === "ann" ? [sabotage] : []),
+        },
+      ).getNotifications({ now, playerId: "ann" });
+
+    it("tells the target who sabotaged them, and in which week", () => {
+      expect(byId(feed().items, "sabotage:7")).toEqual({
+        id: "sabotage:7",
+        kind: "sabotaged",
+        title: "Bob sabotaged you",
+        detail: "5 points lost · Week 02",
+        href: "/tasks/week-02#power-ups",
+        at: sabotage.at,
+        unread: true,
+      });
+    });
+
+    it("doesn't show it before it happened", () => {
+      expect(
+        byId(feed(at("2026-06-30T08:00:00Z")).items, "sabotage:7"),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("shields and mirrors", () => {
+    const ann = { id: "ann", seasonId: "cohort-2026", name: "Ann" };
+    const bob = { id: "bob", seasonId: "cohort-2026", name: "Bob" };
+    const bounced = {
+      id: 7,
+      taskId: "week-01",
+      effect: "sabotage" as const,
+      label: "sabotaged Ann, but it bounced off Ann's Mirror",
+      player: bob,
+      target: ann,
+      outcome: "reflected" as const,
+      at: "2026-06-25T09:00:00.000Z",
+    };
+    const RESULTS = "2026-06-30T20:00:00.000Z";
+    const feed = (playerId: string, now = NOW) =>
+      createNotificationQueries(
+        competitionData({
+          tasks: [week1, week2, week3],
+          resultsPostedAt: { "week-01": RESULTS },
+        }),
+        {
+          getPlayerRankHistory: () => [],
+          getSabotagesOf: (id) => (id === "ann" ? [bounced] : []),
+          getSabotagesBy: (id) => (id === "bob" ? [bounced] : []),
+        },
+      ).getNotifications({ now, playerId });
+
+    it("tells both sides once the week's results are out", () => {
+      expect(byId(feed("ann").items, "defended:7")).toMatchObject({
+        kind: "shielded",
+        title: "Your Mirror bounced Bob's Sabotage back",
+        detail: "no points lost · Week 01",
+        at: RESULTS,
+      });
+      expect(byId(feed("ann").items, "sabotage:7")?.detail).toBe(
+        "no points lost · Week 01",
+      );
+      expect(byId(feed("bob").items, "reflected:7")).toMatchObject({
+        kind: "reflected",
+        title: "Your Sabotage bounced off Ann's Mirror",
+        detail: "5 points lost · Week 01",
+      });
+      expect(
+        byId(feed("ann", at("2026-06-30T19:00:00Z")).items, "defended:7"),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("gifts", () => {
+    it("tells the recipient who sent coins, with their note", () => {
+      const { items } = feedFor(
+        {
+          players: [
+            { id: "ann", seasonId: "cohort-2026", name: "Ann" },
+            { id: "bob", seasonId: "cohort-2026", name: "Bob" },
+          ],
+          coins: {
+            ...competitionData().coins,
+            gifts: [
+              {
+                id: 3,
+                fromPlayerId: "bob",
+                toPlayerId: "ann",
+                amount: 2,
+                message: "for the carry",
+                at: "2026-06-30T10:00:00.000Z",
+              },
+            ],
+          },
+        },
+        { playerId: "ann" },
+      );
+      expect(byId(items, "gift:3")).toEqual({
+        id: "gift:3",
+        kind: "gift-received",
+        title: "Bob sent you 2 Clim Coin",
+        detail: '"for the carry"',
+        href: "/account#history",
+        at: "2026-06-30T10:00:00.000Z",
+        unread: true,
+      });
+    });
+
+    it("tells a player how the Taskmaster answered their wish", () => {
+      const wish = {
+        purchaseId: 1,
+        playerId: "ann",
+        wish: "An extra day",
+        at: "2026-06-30T09:00:00.000Z",
+      };
+      const { items } = feedFor(
+        {
+          coins: {
+            ...competitionData().coins,
+            wishes: [
+              { ...wish, id: 1, status: "pending" },
+              {
+                ...wish,
+                id: 2,
+                status: "granted",
+                response: "Enjoy!",
+                decidedAt: "2026-06-30T10:00:00.000Z",
+              },
+              {
+                ...wish,
+                id: 3,
+                status: "declined",
+                decidedAt: "2026-06-30T11:00:00.000Z",
+              },
+            ],
+          },
+        },
+        { playerId: "ann" },
+      );
+      expect(byId(items, "wish:1")).toBeUndefined();
+      expect(byId(items, "wish:2")).toEqual({
+        id: "wish:2",
+        kind: "wish-granted",
+        title: "The Taskmaster granted your wish",
+        detail: "Enjoy!",
+        href: "/account#wish",
+        at: "2026-06-30T10:00:00.000Z",
+        unread: true,
+      });
+      expect(byId(items, "wish:3")).toMatchObject({
+        kind: "wish-declined",
+        detail: '"An extra day"',
+      });
+    });
+
+    it("tells a player about coins and items an admin gifted them", () => {
+      const { items } = feedFor(
+        {
+          coins: {
+            ...competitionData().coins,
+            items: [shopItem({ id: "ghost", name: "Ghost" })],
+            adjustments: [
+              {
+                id: 4,
+                playerId: "ann",
+                amount: 5,
+                reason: "Great sportsmanship",
+                actorName: "Taskmaster",
+                at: "2026-06-30T10:00:00.000Z",
+              },
+              {
+                id: 5,
+                playerId: "ann",
+                amount: -2,
+                reason: "Correction",
+                actorName: "Taskmaster",
+                at: "2026-06-30T11:00:00.000Z",
+              },
+            ],
+            itemGifts: [
+              {
+                id: 6,
+                purchaseId: 9,
+                playerId: "ann",
+                itemId: "ghost",
+                reason: "Best costume",
+                actorName: "Taskmaster",
+                at: "2026-06-30T12:00:00.000Z",
+              },
+            ],
+          },
+        },
+        { playerId: "ann" },
+      );
+      expect(byId(items, "coin-grant:4")).toEqual({
+        id: "coin-grant:4",
+        kind: "gift-received",
+        title: "You were gifted 5 Clim Coin",
+        detail: "Great sportsmanship",
+        href: "/account#history",
+        at: "2026-06-30T10:00:00.000Z",
+        unread: true,
+      });
+      expect(byId(items, "coin-grant:5")).toBeUndefined();
+      expect(byId(items, "item-gift:6")).toEqual({
+        id: "item-gift:6",
+        kind: "gift-received",
+        title: "You were gifted Ghost",
+        detail: "Best costume",
+        href: "/account#inventory",
+        at: "2026-06-30T12:00:00.000Z",
+        unread: true,
+      });
+    });
+
+    it("tells a player about an egg an admin gifted them, while eggs are on", () => {
+      const eggGift = {
+        id: 8,
+        playerId: "ann",
+        crateId: "faberge-egg",
+        reason: "Star of the week",
+        actorName: "Taskmaster",
+        at: "2026-06-30T13:00:00.000Z",
+      };
+      const feed = (shop_eggs: boolean) =>
+        feedFor(
+          {
+            features: {
+              ...competitionData().features,
+              shop_eggs,
+            },
+            coins: { ...competitionData().coins, eggGifts: [eggGift] },
+          },
+          { playerId: "ann" },
+        ).items;
+      expect(byId(feed(true), "egg-gift:8")).toEqual({
+        id: "egg-gift:8",
+        kind: "gift-received",
+        title: "You were gifted a Fabergé Egg",
+        detail: "Star of the week",
+        href: "/account#inventory",
+        at: "2026-06-30T13:00:00.000Z",
+        unread: true,
+      });
+      expect(byId(feed(false), "egg-gift:8")).toBeUndefined();
     });
   });
 });

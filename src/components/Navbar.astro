@@ -2,6 +2,8 @@
 // Site navigation styled as a terminal window title bar.
 import NotificationBell from "./NotificationBell.astro";
 import NotificationPanel from "./NotificationPanel.astro";
+import CoinBalanceChip from "./CoinBalanceChip.astro";
+import CoinAmount from "./CoinAmount.astro";
 import { withBase } from "../lib/url";
 import type { NotificationFeed, Viewer } from "../types";
 
@@ -10,9 +12,30 @@ interface Props {
   viewer?: Viewer;
   /** Signed-in players' feed; the bell only shows when this is set. */
   notifications?: NotificationFeed;
+  /** Signed-in players' Clim Coin balance; the wallet chip shows when set. */
+  coinBalance?: number;
+  /** The skill trees feature flag: links `/skills` when on. */
+  skillTrees?: boolean;
+  /** The achievements feature flag: links players' achievements when on. */
+  achievements?: boolean;
+  /** The marketplace feature flag: links `/market` when on. */
+  market?: boolean;
+  /** The bounties feature flag: links `/bounties` when on. */
+  bounties?: boolean;
+  /** The pool bracket feature flag: links `/pool` when on. */
+  pool?: boolean;
 }
 
-const { viewer, notifications } = Astro.props;
+const {
+  viewer,
+  notifications,
+  coinBalance,
+  skillTrees = false,
+  achievements = false,
+  market = false,
+  bounties = false,
+  pool = false,
+} = Astro.props;
 
 interface NavItem {
   href: string;
@@ -24,65 +47,106 @@ interface NavGroup {
   children: NavItem[];
 }
 
-// The primary nav collapses into three command-style dropdowns. Home stays
-// reachable via the brand/logo link rather than its own nav item.
-const navGroups: NavGroup[] = [
+// The most-visited pages sit directly on the bar; everything else is grouped
+// by intent under one "more" menu (collapsible sections on phones). Home
+// stays reachable via the brand link, and every page is also in the ⌘K
+// command palette. Each primary link heads one of the groups below.
+const primaryLinks: NavItem[] = [
+  { href: "/tasks", label: "tasks" },
+  { href: "/leaderboard", label: "leaderboard" },
+  { href: "/shop", label: "shop" },
+];
+
+// Feature-flagged pages join their group when on; a group left empty (the
+// Clim Coin extras with every flag off) isn't shown.
+const moreGroups: NavGroup[] = [
   {
-    label: "challenge",
+    label: "play",
     children: [
-      { href: "/tasks", label: "tasks" },
-      { href: "/recaps", label: "recaps" },
       { href: "/live", label: "live" },
+      { href: "/recaps", label: "recaps" },
+      ...(pool ? [{ href: "/pool", label: "pool master" }] : []),
       { href: "/rules", label: "rules" },
+    ],
+  },
+  {
+    label: "clim coin",
+    children: [
+      ...(market ? [{ href: "/market", label: "marketplace" }] : []),
+      ...(bounties ? [{ href: "/bounties", label: "bounties" }] : []),
+      ...(skillTrees ? [{ href: "/skills", label: "skill trees" }] : []),
     ],
   },
   {
     label: "rankings",
     children: [
-      { href: "/leaderboard", label: "leaderboard" },
       { href: "/teams", label: "teams" },
       { href: "/stats", label: "stats" },
       { href: "/hall-of-fame", label: "hall of fame" },
     ],
   },
   {
-    label: "players",
+    label: "people",
     children: [
       { href: "/players", label: "players" },
       { href: "/compare", label: "compare" },
     ],
   },
-];
+].filter((group) => group.children.length > 0);
 
 const path = Astro.url.pathname;
 const isActive = (href: string) => {
   const full = withBase(href);
-  return href === "/" ? path === full : path.startsWith(full);
+  // The profile page sits above the other account pages (e.g. the
+  // password), so it only matches itself.
+  return href === "/" || href === "/account"
+    ? path.replace(/\/$/, "") === full.replace(/\/$/, "")
+    : path.startsWith(full);
 };
-const isGroupActive = (group: NavGroup) =>
-  group.children.some((child) => isActive(child.href));
+const isMoreActive = moreGroups.some((group) =>
+  group.children.some((child) => isActive(child.href)),
+);
 // Account links: players get their profile, admins the admin area, and
 // anyone signed in a logout button (a POST form, so it can't be triggered by
-// a stray link). On desktop they sit in one "account" dropdown so the bar
-// never overflows; the mobile menu lists them flat.
+// a stray link). On desktop they sit in one "account" dropdown; the mobile
+// menu lists them flat.
 const accountLinks: NavItem[] = viewer
   ? [
       ...(viewer.playerId ? [{ href: "/account", label: "profile" }] : []),
+      ...(viewer.playerId && achievements
+        ? [{ href: "/account/achievements", label: "achievements" }]
+        : []),
       ...(viewer.isAdmin ? [{ href: "/admin", label: "admin" }] : []),
     ]
   : [{ href: "/login", label: "login" }];
 const isAccountActive = accountLinks.some((link) => isActive(link.href));
+
+const barLink =
+  "group inline-flex shrink-0 items-center whitespace-nowrap rounded px-2 py-2 text-sm tracking-wide transition-colors";
+// Toggle visibility with max-* variants: a base `hidden` loses to this
+// `inline-flex`, but variant utilities always win.
+const utilityBox =
+  "inline-flex h-[34px] shrink-0 items-center rounded border text-xs transition-colors";
+const menuLink =
+  "group/item flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm tracking-wide transition-colors";
+// A collapsible mobile menu section's header row (hides the native marker).
+const mobileSummary =
+  "flex cursor-pointer list-none items-center justify-between gap-3 py-3 text-sm tracking-wide [&::-webkit-details-marker]:hidden";
 ---
 
 <header
   class="sticky top-0 z-50 border-b border-grid bg-term-bg/85 backdrop-blur supports-[backdrop-filter]:bg-term-bg/70"
 >
   <nav
-    class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6"
+    class="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-3 sm:px-6"
     aria-label="Primary"
   >
-    <!-- Brand / terminal traffic lights -->
-    <a href={withBase("/")} class="group mr-auto flex items-center gap-3">
+    <!-- Brand / terminal traffic lights. The tagline steps aside between the
+         desktop breakpoint and xl so the full link bar fits. -->
+    <a
+      href={withBase("/")}
+      class="group mr-auto flex min-w-0 items-center gap-3"
+    >
       <span class="hidden items-center gap-1.5 sm:flex" aria-hidden="true">
         <span class="h-3 w-3 rounded-full bg-dot-red" data-tl="red"></span>
         <span class="h-3 w-3 rounded-full bg-dot-amber" data-tl="amber"></span>
@@ -90,29 +154,29 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
       </span>
       <span class="flex flex-col leading-none">
         <span
-          class="text-base font-extrabold tracking-[0.18em] text-ink sm:text-lg"
+          class="whitespace-nowrap text-sm font-extrabold tracking-[0.12em] text-ink min-[360px]:text-base min-[360px]:tracking-[0.18em] sm:text-lg"
         >
           EAYL&nbsp;<span class="text-acid text-glow">TASKMASTER</span>
         </span>
-        <span class="mt-1 text-[10px] tracking-[0.25em] text-ink-faint">
+        <span
+          class="mt-1 text-[10px] tracking-[0.25em] text-ink-faint max-sm:hidden min-[1100px]:max-xl:hidden"
+        >
           THE ULTIMATE ACADEMY CHALLENGE
         </span>
       </span>
     </a>
 
-    <!-- Desktop links -->
-    <ul class="hidden items-center gap-1 min-[1100px]:flex">
+    <!-- Desktop page links -->
+    <ul class="hidden items-center gap-0.5 min-[1100px]:flex">
       {
-        navGroups.map((group) => (
-          <li class="relative" data-nav-dropdown>
-            <button
-              type="button"
-              data-nav-dropdown-trigger
-              aria-haspopup="true"
-              aria-expanded="false"
+        primaryLinks.map((link) => (
+          <li>
+            <a
+              href={withBase(link.href)}
+              aria-current={isActive(link.href) ? "page" : undefined}
               class:list={[
-                "group inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-2 text-sm tracking-wide transition-colors",
-                isGroupActive(group)
+                barLink,
+                isActive(link.href)
                   ? "text-acid"
                   : "text-ink-dim hover:text-ink",
               ]}
@@ -120,81 +184,161 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
               <span
                 class:list={[
                   "mr-1",
-                  isGroupActive(group)
+                  isActive(link.href)
                     ? "text-acid"
                     : "text-ink-faint group-hover:text-acid",
                 ]}
               >
                 ./
               </span>
-              {group.label}
-              <span
-                class="ml-0.5 text-[10px] text-ink-faint transition-transform group-aria-expanded:rotate-180"
-                aria-hidden="true"
-              >
-                ▾
-              </span>
-            </button>
-            <ul
-              data-nav-dropdown-menu
-              class="absolute left-0 top-full z-50 mt-1 hidden min-w-[11rem] rounded-md border border-grid bg-term-panel p-1 shadow-lg shadow-acid/5"
-            >
-              {group.children.map((child) => (
-                <li>
-                  <a
-                    href={withBase(child.href)}
-                    aria-current={isActive(child.href) ? "page" : undefined}
-                    class:list={[
-                      "group/item flex items-center gap-2 rounded px-3 py-2 text-sm tracking-wide transition-colors",
-                      isActive(child.href)
-                        ? "text-acid"
-                        : "text-ink-dim hover:bg-term-panel-2 hover:text-ink",
-                    ]}
-                  >
-                    <span
-                      class:list={[
-                        isActive(child.href)
-                          ? "text-acid"
-                          : "text-ink-faint group-hover/item:text-acid",
-                      ]}
-                    >
-                      ./
-                    </span>
-                    {child.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
+              {link.label}
+            </a>
           </li>
         ))
       }
+      <li class="relative" data-nav-dropdown>
+        <button
+          type="button"
+          data-nav-dropdown-trigger
+          aria-haspopup="true"
+          aria-expanded="false"
+          class:list={[
+            barLink,
+            "gap-1",
+            isMoreActive ? "text-acid" : "text-ink-dim hover:text-ink",
+          ]}
+        >
+          <span
+            class:list={[
+              "mr-1",
+              isMoreActive
+                ? "text-acid"
+                : "text-ink-faint group-hover:text-acid",
+            ]}
+          >
+            ./
+          </span>
+          more
+          <span
+            class="ml-0.5 text-[10px] text-ink-faint transition-transform group-aria-expanded:rotate-180"
+            aria-hidden="true"
+          >
+            ▾
+          </span>
+        </button>
+        <div
+          data-nav-dropdown-menu
+          class="absolute right-0 top-full z-50 mt-1 hidden w-56 rounded-md border border-grid bg-term-panel p-1 shadow-lg shadow-acid/5"
+        >
+          {
+            moreGroups.map((group) => (
+              <div class="border-b border-grid-soft py-1 last:border-b-0">
+                <p class="px-3 pb-1 pt-1.5 text-[10px] uppercase tracking-[0.25em] text-ink-faint">
+                  {group.label}
+                </p>
+                <ul>
+                  {group.children.map((child) => (
+                    <li>
+                      <a
+                        href={withBase(child.href)}
+                        aria-current={isActive(child.href) ? "page" : undefined}
+                        class:list={[
+                          menuLink,
+                          isActive(child.href)
+                            ? "text-acid"
+                            : "text-ink-dim hover:bg-term-panel-2 hover:text-ink",
+                        ]}
+                      >
+                        <span
+                          class:list={[
+                            isActive(child.href)
+                              ? "text-acid"
+                              : "text-ink-faint group-hover/item:text-acid",
+                          ]}
+                        >
+                          ./
+                        </span>
+                        {child.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))
+          }
+        </div>
+      </li>
+    </ul>
+
+    <span
+      class="mx-1 hidden h-5 w-px bg-grid min-[1100px]:block"
+      aria-hidden="true"></span>
+
+    <!-- Utilities: search · coins · notifications · account (the theme toggle is in the footer) -->
+    <div class="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        data-command-palette-trigger
+        aria-label="Search"
+        aria-keyshortcuts="Meta+K Control+K"
+        title="Search (⌘K)"
+        class:list={[
+          utilityBox,
+          "gap-1.5 border-grid px-2 text-ink-dim hover:border-ink-faint hover:text-ink max-[1100px]:hidden",
+        ]}
+      >
+        <span class="text-acid" aria-hidden="true">$</span>
+        <kbd
+          class="rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint pointer-coarse:hidden"
+          aria-hidden="true">⌘K</kbd
+        >
+      </button>
+
+      {
+        coinBalance !== undefined && (
+          <CoinBalanceChip balance={coinBalance} class="max-sm:hidden" />
+        )
+      }
+
+      {
+        notifications && (
+          <NotificationBell unreadCount={notifications.unreadCount} />
+        )
+      }
+
       {
         viewer ? (
-          <li class="relative" data-nav-dropdown>
+          <div class="relative hidden min-[1100px]:block" data-nav-dropdown>
             <button
               type="button"
               data-nav-dropdown-trigger
               aria-haspopup="true"
               aria-expanded="false"
               title={`Signed in as ${viewer.name}`}
+              aria-label={`Account menu, signed in as ${viewer.name}`}
               class:list={[
-                "group inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-2 text-sm tracking-wide transition-colors",
-                isAccountActive ? "text-acid" : "text-ink-dim hover:text-ink",
+                utilityBox,
+                "group gap-0.5 px-2",
+                isAccountActive
+                  ? "border-acid/60 text-acid"
+                  : "border-grid text-ink-dim hover:border-ink-faint hover:text-acid",
               ]}
             >
-              <span
-                class:list={[
-                  "mr-1",
-                  isAccountActive
-                    ? "text-acid"
-                    : "text-ink-faint group-hover:text-acid",
-                ]}
+              <svg
+                class="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
               >
-                ./
-              </span>
-              account
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 21a8 8 0 0 1 16 0" />
+              </svg>
               <span
-                class="ml-0.5 text-[10px] text-ink-faint transition-transform group-aria-expanded:rotate-180"
+                class="text-[10px] text-ink-faint transition-transform group-aria-expanded:rotate-180"
                 aria-hidden="true"
               >
                 ▾
@@ -213,7 +357,7 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
                     href={withBase(child.href)}
                     aria-current={isActive(child.href) ? "page" : undefined}
                     class:list={[
-                      "group/item flex items-center gap-2 rounded px-3 py-2 text-sm tracking-wide transition-colors",
+                      menuLink,
                       isActive(child.href)
                         ? "text-acid"
                         : "text-ink-dim hover:bg-term-panel-2 hover:text-ink",
@@ -236,7 +380,10 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
                 <form method="post" action={withBase("/logout")}>
                   <button
                     type="submit"
-                    class="group/item flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm tracking-wide text-ink-dim transition-colors hover:bg-term-panel-2 hover:text-ink"
+                    class:list={[
+                      menuLink,
+                      "text-ink-dim hover:bg-term-panel-2 hover:text-ink",
+                    ]}
                   >
                     <span class="text-ink-faint group-hover/item:text-acid">
                       ./
@@ -246,195 +393,61 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
                 </form>
               </li>
             </ul>
-          </li>
+          </div>
         ) : (
-          <li>
-            <a
-              href={withBase("/login")}
-              aria-current={isActive("/login") ? "page" : undefined}
-              class:list={[
-                "group inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-2 text-sm tracking-wide transition-colors",
-                isActive("/login")
-                  ? "text-acid"
-                  : "text-ink-dim hover:text-ink",
-              ]}
-            >
-              <span
-                class:list={[
-                  "mr-1",
-                  isActive("/login")
-                    ? "text-acid"
-                    : "text-ink-faint group-hover:text-acid",
-                ]}
-              >
-                ./
-              </span>
-              login
-            </a>
-          </li>
+          <a
+            href={withBase("/login")}
+            aria-current={isActive("/login") ? "page" : undefined}
+            class:list={[
+              utilityBox,
+              "gap-1 px-2.5 max-[1100px]:hidden",
+              isActive("/login")
+                ? "border-acid text-acid"
+                : "border-acid/50 text-acid hover:bg-acid hover:text-term-bg",
+            ]}
+          >
+            <span aria-hidden="true">~/</span>
+            login
+          </a>
         )
       }
-      <li>
-        <button
-          type="button"
-          data-command-palette-trigger
-          aria-keyshortcuts="Meta+K Control+K"
-          class="ml-1 inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded border border-grid px-2.5 py-1.5 text-xs text-ink-dim transition-colors hover:border-ink-faint hover:text-ink"
-        >
-          <span class="text-acid" aria-hidden="true">$</span>
-          <span class="tracking-wide">search</span>
-          <kbd
-            class="rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint"
-            >⌘K</kbd
-          >
-        </button>
-      </li>
-      <li>
-        <button
-          type="button"
-          data-theme-toggle
-          aria-label="Toggle light / dark theme"
-          title="Toggle light / dark theme"
-          class="ml-1 inline-flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded border border-grid text-ink-dim transition-colors hover:border-ink-faint hover:text-acid"
-        >
-          <svg
-            class="theme-icon-moon h-4 w-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-          </svg>
-          <svg
-            class="theme-icon-sun h-4 w-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="12" cy="12" r="4"></circle>
-            <path
-              d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"
-            ></path>
-          </svg>
-        </button>
-      </li>
-    </ul>
 
-    {
-      notifications && (
-        <NotificationBell
-          unreadCount={notifications.unreadCount}
-          class="-ml-2"
-        />
-      )
-    }
-
-    <!-- Mobile toggle -->
-    <button
-      type="button"
-      id="nav-toggle"
-      class="inline-flex items-center gap-2 rounded border border-grid px-3 py-2 text-xs text-ink-dim hover:text-ink min-[1100px]:hidden"
-      aria-expanded="false"
-      aria-controls="mobile-menu"
-    >
-      <span class="text-acid">~/</span>
-      <span id="nav-toggle-label">menu</span>
-    </button>
+      <!-- Mobile toggle -->
+      <button
+        type="button"
+        id="nav-toggle"
+        class:list={[
+          utilityBox,
+          "gap-2 border-grid px-3 text-ink-dim hover:text-ink min-[1100px]:hidden",
+        ]}
+        aria-expanded="false"
+        aria-controls="mobile-menu"
+      >
+        <span class="text-acid" aria-hidden="true">~/</span>
+        <span id="nav-toggle-label">menu</span>
+      </button>
+    </div>
   </nav>
 
-  <!-- Mobile menu -->
+  <!-- Mobile menu: the top pages, then each group (and the account) as a
+       collapsible section, one open at a time, then search. The group
+       holding the current page starts open. -->
   <div
     id="mobile-menu"
-    class="hidden border-t border-grid bg-term-panel min-[1100px]:hidden"
+    class="hidden max-h-[calc(100dvh-4rem)] overflow-y-auto border-t border-grid bg-term-panel min-[1100px]:hidden"
   >
     <ul class="mx-auto max-w-6xl px-4 py-2 sm:px-6">
-      <li>
-        <button
-          type="button"
-          data-command-palette-trigger
-          class="flex w-full items-center gap-2 border-b border-grid-soft py-3 text-left text-sm tracking-wide text-ink-dim"
-        >
-          <span class="text-acid">$</span>
-          search
-          <kbd
-            class="ml-auto rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint"
-            >⌘K</kbd
-          >
-        </button>
-      </li>
-      <li>
-        <button
-          type="button"
-          data-theme-toggle
-          aria-label="Toggle colour theme"
-          class="flex w-full items-center gap-2 border-b border-grid-soft py-3 text-left text-sm tracking-wide text-ink-dim"
-        >
-          <span class="text-acid">$</span>
-          theme
-          <span data-theme-state class="ml-auto tracking-widest text-ink-faint"
-            >--dark</span
-          >
-        </button>
-      </li>
-      {
-        navGroups.map((group) => (
-          <li class="border-b border-grid-soft py-2 last:border-b-0">
-            <p class="px-0 py-1 text-[10px] uppercase tracking-[0.25em] text-ink-faint">
-              {group.label}
-            </p>
-            <ul>
-              {group.children.map((child) => (
-                <li>
-                  <a
-                    href={withBase(child.href)}
-                    aria-current={isActive(child.href) ? "page" : undefined}
-                    class:list={[
-                      "flex items-center gap-2 py-2 pl-3 text-sm tracking-wide",
-                      isActive(child.href) ? "text-acid" : "text-ink-dim",
-                    ]}
-                  >
-                    <span
-                      class:list={[
-                        isActive(child.href) ? "text-acid" : "text-ink-faint",
-                      ]}
-                    >
-                      ./
-                    </span>
-                    {child.label}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))
-      }
-      <li class="border-b border-grid-soft py-2 last:border-b-0">
-        {
-          viewer && (
-            <p class="py-1 text-[10px] uppercase tracking-[0.25em] text-ink-faint">
-              signed in as {viewer.name}
-            </p>
-          )
-        }
-        <ul>
+      <li class="border-b border-grid-soft py-2">
+        <ul class="flex flex-wrap justify-between gap-x-4">
           {
-            accountLinks.map((link) => (
+            primaryLinks.map((link) => (
               <li>
                 <a
                   href={withBase(link.href)}
                   aria-current={isActive(link.href) ? "page" : undefined}
                   class:list={[
-                    "flex items-center gap-2 py-2 text-sm tracking-wide",
-                    viewer && "pl-3",
-                    isActive(link.href) ? "text-acid" : "text-ink-dim",
+                    "flex items-center gap-1.5 py-2 text-sm font-bold tracking-wide",
+                    isActive(link.href) ? "text-acid" : "text-ink",
                   ]}
                 >
                   <span
@@ -449,22 +462,168 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
               </li>
             ))
           }
-          {
-            viewer && (
-              <li>
-                <form method="post" action={withBase("/logout")}>
-                  <button
-                    type="submit"
-                    class="flex w-full items-center gap-2 py-2 pl-3 text-left text-sm tracking-wide text-ink-dim"
-                  >
-                    <span class="text-ink-faint">./</span>
-                    logout
-                  </button>
-                </form>
-              </li>
-            )
-          }
         </ul>
+      </li>
+      {
+        moreGroups.map((group) => {
+          const open = group.children.some((child) => isActive(child.href));
+          return (
+            <li class="border-b border-grid-soft">
+              <details name="mobile-nav-section" open={open} class="group/section">
+                <summary class:list={[mobileSummary, open ? "text-acid" : "text-ink-dim"]}>
+                  <span>
+                    <span class="text-ink-faint">./</span>
+                    {group.label}/
+                  </span>
+                  <span class="text-[10px] tracking-widest text-ink-faint">
+                    {group.children.length}
+                    <span
+                      class="ml-1 inline-block transition-transform group-open/section:rotate-180"
+                      aria-hidden="true"
+                    >
+                      ▾
+                    </span>
+                  </span>
+                </summary>
+                <ul class="grid grid-cols-2 gap-x-4 pb-2 pl-4">
+                  {group.children.map((child) => (
+                    <li>
+                      <a
+                        href={withBase(child.href)}
+                        aria-current={isActive(child.href) ? "page" : undefined}
+                        class:list={[
+                          "flex items-center gap-2 py-2 text-sm tracking-wide",
+                          isActive(child.href) ? "text-acid" : "text-ink-dim",
+                        ]}
+                      >
+                        <span
+                          class:list={[
+                            isActive(child.href)
+                              ? "text-acid"
+                              : "text-ink-faint",
+                          ]}
+                        >
+                          ./
+                        </span>
+                        {child.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </li>
+          );
+        })
+      }
+      {
+        viewer ? (
+          <li class="border-b border-grid-soft">
+            <details
+              name="mobile-nav-section"
+              open={isAccountActive}
+              class="group/section"
+            >
+              <summary
+                class:list={[
+                  mobileSummary,
+                  isAccountActive ? "text-acid" : "text-ink-dim",
+                ]}
+              >
+                <span class="flex min-w-0 items-center gap-1">
+                  <span class="text-ink-faint">~/</span>
+                  <span class="truncate">{viewer.name}</span>
+                </span>
+                <span class="flex shrink-0 items-center gap-2 text-[10px] tracking-widest text-ink-faint">
+                  {coinBalance !== undefined && (
+                    <CoinAmount
+                      amount={coinBalance}
+                      class:list={[
+                        "text-xs",
+                        coinBalance < 0 ? "text-danger" : "text-amber",
+                      ]}
+                    />
+                  )}
+                  <span
+                    class="inline-block transition-transform group-open/section:rotate-180"
+                    aria-hidden="true"
+                  >
+                    ▾
+                  </span>
+                </span>
+              </summary>
+              <ul class="grid grid-cols-2 gap-x-4 pb-2 pl-4">
+                {coinBalance !== undefined && (
+                  <li>
+                    <a
+                      href={withBase("/account#wallet")}
+                      class="flex items-center gap-2 py-2 text-sm tracking-wide text-ink-dim"
+                    >
+                      <span class="text-ink-faint">~/</span>
+                      wallet
+                    </a>
+                  </li>
+                )}
+                {accountLinks.map((link) => (
+                  <li>
+                    <a
+                      href={withBase(link.href)}
+                      aria-current={isActive(link.href) ? "page" : undefined}
+                      class:list={[
+                        "flex items-center gap-2 py-2 text-sm tracking-wide",
+                        isActive(link.href) ? "text-acid" : "text-ink-dim",
+                      ]}
+                    >
+                      <span
+                        class:list={[
+                          isActive(link.href) ? "text-acid" : "text-ink-faint",
+                        ]}
+                      >
+                        ~/
+                      </span>
+                      {link.label}
+                    </a>
+                  </li>
+                ))}
+                <li>
+                  <form method="post" action={withBase("/logout")}>
+                    <button
+                      type="submit"
+                      class="flex w-full items-center gap-2 py-2 text-left text-sm tracking-wide text-ink-dim"
+                    >
+                      <span class="text-ink-faint">~/</span>
+                      logout
+                    </button>
+                  </form>
+                </li>
+              </ul>
+            </details>
+          </li>
+        ) : (
+          <li class="border-b border-grid-soft">
+            <a
+              href={withBase("/login")}
+              aria-current={isActive("/login") ? "page" : undefined}
+              class="flex items-center gap-2 py-3 text-sm tracking-wide text-acid"
+            >
+              <span>~/</span>
+              login
+            </a>
+          </li>
+        )
+      }
+      <li>
+        <button
+          type="button"
+          data-command-palette-trigger
+          class="flex w-full items-center gap-2 py-3 text-left text-sm tracking-wide text-ink-dim"
+        >
+          <span class="text-acid">$</span>
+          search
+          <kbd
+            class="ml-auto rounded border border-grid bg-term-bg px-1.5 py-0.5 text-[10px] tracking-widest text-ink-faint pointer-coarse:hidden"
+            >⌘K</kbd
+          >
+        </button>
       </li>
     </ul>
   </div>
@@ -473,15 +632,6 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
 {notifications && <NotificationPanel feed={notifications} />}
 
 <script>
-  import {
-    applyTheme,
-    getActiveTheme,
-    isTheme,
-    THEME_CHANGE_EVENT,
-    THEME_META_COLOR,
-    type ThemeName,
-  } from "../lib/theme";
-
   const toggle = document.getElementById("nav-toggle");
   const menu = document.getElementById("mobile-menu");
   const label = document.getElementById("nav-toggle-label");
@@ -531,37 +681,5 @@ const isAccountActive = accountLinks.some((link) => isActive(link.href));
   document.addEventListener("click", () => closeAllDropdowns());
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeAllDropdowns();
-  });
-
-  // ---- Theme toggle --------------------------------------------------
-  // The nav button is the quick dark/light switch; the exotic CRT phosphor
-  // themes are summoned from the command palette. This widget just reflects
-  // whatever theme is active — including those palette-triggered changes —
-  // by listening for the shared theme-change event.
-  const themeMeta = document.querySelector('meta[name="theme-color"]');
-  const stateLabels = document.querySelectorAll("[data-theme-state]");
-
-  const reflectTheme = (theme: ThemeName) => {
-    themeMeta?.setAttribute("content", THEME_META_COLOR[theme]);
-    stateLabels.forEach((el) => {
-      el.textContent = `--${theme}`;
-    });
-  };
-
-  // Reflect whatever the pre-paint script already applied.
-  reflectTheme(getActiveTheme());
-
-  // Keep the label/chrome in sync when any source changes the theme.
-  window.addEventListener(THEME_CHANGE_EVENT, (e) => {
-    const theme = (e as CustomEvent<{ theme: ThemeName }>).detail?.theme;
-    if (isTheme(theme)) reflectTheme(theme);
-  });
-
-  document.querySelectorAll("[data-theme-toggle]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      // The button flips between the two standard themes; clicking it from an
-      // exotic phosphor theme returns you to the plain light/dark pair.
-      applyTheme(getActiveTheme() === "light" ? "dark" : "light");
-    });
   });
 </script>
