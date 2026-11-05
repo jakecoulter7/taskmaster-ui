@@ -845,34 +845,36 @@ a[data-me-row].is-me {
   }
 }
 
-30% {
-  width: 72px;
-  height: 72px;
-}
+@keyframes egg-siren-pulse {
+  30% {
+    width: 72px;
+    height: 72px;
+  }
 
-58% {
-  width: 160px;
-  height: 160px;
-}
+  58% {
+    width: 160px;
+    height: 160px;
+  }
 
-78% {
-  width: 320px;
-  height: 320px;
-}
+  78% {
+    width: 320px;
+    height: 320px;
+  }
 
-92% {
-  width: 800px;
-  height: 800px;
-}
+  92% {
+    width: 800px;
+    height: 800px;
+  }
 
-97.5% {
-  width: 140vmax;
-  height: 140vmax;
-}
+  97.5% {
+    width: 140vmax;
+    height: 140vmax;
+  }
 
-99% {
-  width: 180vmax;
-  height: 180vmax;
+  99% {
+    width: 180vmax;
+    height: 180vmax;
+  }
 }
 
 @keyframes egg-waddle {
