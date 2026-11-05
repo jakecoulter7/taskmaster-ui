@@ -317,6 +317,8 @@ body::before {
 
 :root[data-theme="light"] .theme-icon-sun {
   display: inline-flex;
+}
+
 /* Loading placeholder: a slow sweep across a panel-coloured block, shown
    while an element has both `.skeleton` and `[data-skeleton]` (scripts drop
    the attribute once the photo loads). Reduced motion leaves a static block. */
